@@ -1,11 +1,10 @@
 """Tests for spider factory dispatch (spec 01-factory)."""
 
-import pytest
+import scrapy
 
 from magpie.config.schema import SourceConfig
 from magpie.factory import create_scraper
 from magpie.playwright.runner import PlaywrightRunner
-from magpie.scrapy.factory import ConfigSpider
 
 
 def _static_config(**overrides: object) -> SourceConfig:
@@ -54,8 +53,7 @@ def _js_config(**overrides: object) -> SourceConfig:
 class TestFactoryDispatch:
     def test_static_config_produces_scrapy_spider(self) -> None:
         scraper = create_scraper(_static_config())
-        assert isinstance(scraper, type) or hasattr(scraper, "name")
-        # Should be a Scrapy Spider class or subclass
+        assert isinstance(scraper, type) and issubclass(scraper, scrapy.Spider)
 
     def test_js_config_produces_playwright_runner(self) -> None:
         scraper = create_scraper(_js_config())

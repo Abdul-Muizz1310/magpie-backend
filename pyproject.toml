@@ -8,7 +8,16 @@ authors = [
     { name = "Abdul-Muizz", email = "abdulmuizz1310@outlook.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "fastapi>=0.135.3",
+    "httpx>=0.28.1",
+    "parsel>=1.11.0",
+    "pydantic>=2.12.5",
+    "pyyaml>=6.0.3",
+    "scrapy>=2.15.0",
+    "uvicorn>=0.44.0",
+]
 
 [project.scripts]
 magpie = "magpie:main"
@@ -24,6 +33,8 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.10",
+    "types-beautifulsoup4>=4.12.0.20250516",
+    "types-pyyaml>=6.0.12.20260408",
 ]
 
 [tool.ruff]
@@ -35,6 +46,15 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.mypy]
 strict = true
 files = ["src"]
+
+[[tool.mypy.overrides]]
+module = [
+    "scrapy.*",
+    "playwright.*",
+    "sqlalchemy.*",
+    "parsel.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

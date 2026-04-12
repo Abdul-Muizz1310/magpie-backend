@@ -29,9 +29,7 @@ class TestHealFlowE2E:
         html = (FIXTURES / "hackernews-v2-broken.html").read_text()
 
         # 4. Verify old selector returns nothing
-        old_results = validate_selector(
-            html, config.item.fields[0].selector
-        )
+        old_results = validate_selector(html, config.item.fields[0].selector)
         assert old_results == []
 
         # 5. Mock LLM to propose a fix

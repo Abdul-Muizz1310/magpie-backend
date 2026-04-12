@@ -1,7 +1,5 @@
 """Tests for content-addressed hashing (spec 02-dedupe)."""
 
-import pytest
-
 from magpie.core.hashing import compute_item_hash
 
 

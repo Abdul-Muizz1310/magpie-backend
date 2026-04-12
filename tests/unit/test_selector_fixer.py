@@ -1,6 +1,5 @@
 """Tests for healer selector fixer (spec 03-healer), LLM mocked."""
 
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -164,9 +163,7 @@ class TestGitHubPR:
             "magpie.healer.github_pr._github_api",
             new_callable=AsyncMock,
         ) as mock_api:
-            mock_api.return_value = {
-                "html_url": "https://github.com/test/repo/pull/1"
-            }
+            mock_api.return_value = {"html_url": "https://github.com/test/repo/pull/1"}
             pr_url = await create_heal_pr(
                 source_name="hackernews",
                 field_name="title",

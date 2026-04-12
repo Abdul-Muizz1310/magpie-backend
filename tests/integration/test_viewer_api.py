@@ -82,9 +82,7 @@ class TestViewerAPIEdgeCases:
 
     @pytest.mark.asyncio
     async def test_limit_over_max_clamped(self, client: AsyncClient) -> None:
-        resp = await client.get(
-            "/runs", params={"source": "hackernews", "limit": 200}
-        )
+        resp = await client.get("/runs", params={"source": "hackernews", "limit": 200})
         # Should either clamp to 100 or reject
         assert resp.status_code in (200, 422)
 

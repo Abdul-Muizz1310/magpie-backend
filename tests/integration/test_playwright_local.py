@@ -9,6 +9,15 @@ import pytest
 from magpie.config.schema import SourceConfig
 from magpie.playwright.runner import PlaywrightRunner
 
+try:
+    from playwright.async_api import async_playwright  # noqa: F401
+
+    _HAS_PLAYWRIGHT = True
+except ImportError:
+    _HAS_PLAYWRIGHT = False
+
+pytestmark = pytest.mark.skipif(not _HAS_PLAYWRIGHT, reason="Playwright browsers not installed")
+
 FIXTURES = Path(__file__).resolve().parent.parent.parent / "fixtures"
 
 
@@ -61,9 +70,7 @@ class TestPlaywrightLocalIntegration:
         assert all("name" in item for item in items)
 
     @pytest.mark.asyncio
-    async def test_handles_missing_wait_for_timeout(
-        self, fixture_server: str
-    ) -> None:
+    async def test_handles_missing_wait_for_timeout(self, fixture_server: str) -> None:
         cfg = SourceConfig(
             name="test-timeout",
             url=f"{fixture_server}/fake-shop.html",
@@ -80,5 +87,5 @@ class TestPlaywrightLocalIntegration:
             },
         )
         runner = PlaywrightRunner(cfg)
-        with pytest.raises(Exception):
+        with pytest.raises(TimeoutError):
             await runner.run()

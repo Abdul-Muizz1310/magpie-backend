@@ -6,10 +6,9 @@ from magpie.storage.repo import ItemRepository
 
 
 @pytest.fixture
-def item_repo(tmp_path):
-    """Create an ItemRepository with a test database."""
-    # Will use testcontainers or SQLite for testing
-    raise NotImplementedError("Wire up test DB in S4")
+def item_repo():
+    """Create a fresh in-memory ItemRepository for each test."""
+    return ItemRepository()
 
 
 class TestDedupeIntegration:
@@ -24,9 +23,7 @@ class TestDedupeIntegration:
         assert result.items_updated == 0
         assert result.items_removed == 0
 
-    def test_second_scrape_identical_no_changes(
-        self, item_repo: ItemRepository
-    ) -> None:
+    def test_second_scrape_identical_no_changes(self, item_repo: ItemRepository) -> None:
         items = [
             {"title": "Article 1", "id": "1"},
             {"title": "Article 2", "id": "2"},
@@ -68,14 +65,10 @@ class TestDedupeIntegration:
         items = [{"title": "Comeback", "id": "1"}]
         item_repo.persist_items("test-source", items, dedupe_key="id")
         item_repo.persist_items("test-source", [], dedupe_key="id")  # removed
-        result = item_repo.persist_items(
-            "test-source", items, dedupe_key="id"
-        )  # reappeared
+        result = item_repo.persist_items("test-source", items, dedupe_key="id")  # reappeared
         assert result.items_new == 1
 
-    def test_empty_scrape_marks_all_removed(
-        self, item_repo: ItemRepository
-    ) -> None:
+    def test_empty_scrape_marks_all_removed(self, item_repo: ItemRepository) -> None:
         items = [{"title": "A", "id": "1"}, {"title": "B", "id": "2"}]
         item_repo.persist_items("test-source", items, dedupe_key="id")
         result = item_repo.persist_items("test-source", [], dedupe_key="id")
@@ -83,7 +76,7 @@ class TestDedupeIntegration:
 
     def test_missing_dedupe_key_raises(self, item_repo: ItemRepository) -> None:
         items = [{"title": "No Key"}]
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             item_repo.persist_items("test-source", items, dedupe_key="id")
 
     def test_duplicate_dedupe_keys_raises(self, item_repo: ItemRepository) -> None:
@@ -91,5 +84,5 @@ class TestDedupeIntegration:
             {"title": "A", "id": "1"},
             {"title": "B", "id": "1"},
         ]
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             item_repo.persist_items("test-source", items, dedupe_key="id")
