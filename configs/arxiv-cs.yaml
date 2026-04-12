@@ -1,0 +1,22 @@
+name: arxiv-cs
+description: Scrape arXiv CS recent submissions
+url: https://arxiv.org/list/cs/recent
+render: false
+schedule: "0 8 * * *"
+rate_limit: { rps: 1 }
+
+item:
+  container: "div.list-entry"
+  fields:
+    - { name: title, selector: "span.list-title::text" }
+    - { name: authors, selector: "span.list-authors a::text" }
+    - { name: link, selector: "a.list-identifier::attr(href)" }
+    - { name: id, selector: "a.list-identifier::text" }
+  dedupe_key: id
+
+pagination:
+  max_pages: 1
+
+health:
+  min_items: 5
+  max_staleness: "48h"

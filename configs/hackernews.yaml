@@ -1,0 +1,22 @@
+name: hackernews
+description: Scrape Hacker News front page
+url: https://news.ycombinator.com
+render: false
+schedule: "0 */6 * * *"
+rate_limit: { rps: 1 }
+
+item:
+  container: "tr.athing"
+  fields:
+    - { name: title, selector: "span.titleline > a::text" }
+    - { name: url, selector: "span.titleline > a::attr(href)" }
+    - { name: id, selector: "::attr(id)" }
+  dedupe_key: id
+
+pagination:
+  next: "a.morelink::attr(href)"
+  max_pages: 3
+
+health:
+  min_items: 20
+  max_staleness: "24h"

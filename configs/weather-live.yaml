@@ -1,0 +1,24 @@
+name: weather-live
+description: Scrape live weather data (JS-rendered)
+url: https://weather.example.com/dashboard
+render: true
+wait_for: "div.weather-grid"
+schedule: "0 */12 * * *"
+rate_limit: { rps: 1 }
+
+actions:
+  - { type: click, selector: "button.show-details" }
+  - { type: wait, ms: 500 }
+
+item:
+  container: "div.weather-card"
+  fields:
+    - { name: city, selector: "h3.city-name::text" }
+    - { name: temperature, selector: "span.temp-value::text" }
+    - { name: condition, selector: "span.condition::text" }
+    - { name: id, selector: "::attr(data-city-id)" }
+  dedupe_key: id
+
+health:
+  min_items: 3
+  max_staleness: "24h"
