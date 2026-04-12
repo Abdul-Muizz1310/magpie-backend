@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: magpie-backend
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: OPENROUTER_MODEL_PRIMARY
+        sync: false
+      - key: GITHUB_PAT_SCRAPE_HEALER
+        sync: false
+      - key: GITHUB_REPO
+        value: Abdul-Muizz1310/magpie-backend
+      - key: GITHUB_HEAL_LABEL
+        value: "scrape:self-heal"
+      - key: APP_ENV
+        value: production
+      - key: FRONTEND_URL
+        value: https://magpie-frontend.vercel.app

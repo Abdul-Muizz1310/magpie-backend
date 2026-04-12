@@ -1,0 +1,28 @@
+name: heal-on-failure
+on:
+  workflow_run:
+    workflows: [nightly-scrape]
+    types: [completed]
+jobs:
+  heal:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install uv
+      - run: uv sync --frozen
+      - run: uv run python -m magpie.healer.run
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GITHUB_PAT_SCRAPE_HEALER: ${{ secrets.GITHUB_PAT_SCRAPE_HEALER }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GITHUB_REPO: Abdul-Muizz1310/magpie-backend
+          GITHUB_HEAL_LABEL: "scrape:self-heal"
