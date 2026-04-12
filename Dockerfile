@@ -5,15 +5,13 @@ WORKDIR /app
 # Install uv
 RUN pip install --no-cache-dir uv
 
-# Copy dependency files first for layer caching
+# Copy everything needed for install
 COPY pyproject.toml uv.lock ./
+COPY src/ src/
+COPY configs/ configs/
 
 # Install dependencies (frozen from lock file)
 RUN uv sync --frozen --no-dev
-
-# Copy source code
-COPY src/ src/
-COPY configs/ configs/
 
 # Bake in the commit SHA at build time
 ARG COMMIT_SHA=unknown
