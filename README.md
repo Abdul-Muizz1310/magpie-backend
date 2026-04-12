@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://magpie-backend.onrender.com">Live Demo</a> •
+  <a href="https://magpie-backend-izzu.onrender.com">Live Demo</a> •
   <a href="WHY.md">Why</a> •
   <a href="docs/ARCHITECTURE.md">Architecture</a> •
   <a href="docs/DEMO.md">Demo Script</a>
