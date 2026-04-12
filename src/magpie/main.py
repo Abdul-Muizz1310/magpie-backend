@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Annotated, Any
 
+import yaml
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -17,16 +21,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        os.environ.get("FRONTEND_URL", "https://magpie-frontend.vercel.app"),
+        os.environ.get("FRONTEND_URL", "https://magpie-frontend-three.vercel.app"),
     ],
     allow_methods=["GET"],
     allow_headers=["*"],
 )
-
-# In-memory store (replaced by DB in production)
-_sources_store: list[dict[str, Any]] = []
-_runs_store: list[dict[str, Any]] = []
-_heals_store: list[dict[str, Any]] = []
 
 _SOURCE_NAME_RE = re.compile(r"^[a-z0-9-]+$")
 
@@ -69,6 +68,147 @@ class HealthResponse(BaseModel):
     status: str
     version: str = ""
     db: str = "ok"
+
+
+# ── Data loading ────────────────────────────────────────────────────────────
+
+
+def _load_configs() -> list[dict[str, Any]]:
+    """Load source configs from YAML files in the configs/ directory."""
+    configs_dir = Path(__file__).resolve().parent.parent.parent / "configs"
+    sources: list[dict[str, Any]] = []
+
+    if not configs_dir.is_dir():
+        return sources
+
+    for yaml_file in sorted(configs_dir.glob("*.yaml")):
+        try:
+            raw = yaml_file.read_text(encoding="utf-8")
+            config = yaml.safe_load(raw)
+            if not isinstance(config, dict) or "name" not in config:
+                continue
+            sha = hashlib.sha256(raw.encode()).hexdigest()[:12]
+            sources.append(
+                {
+                    "name": config["name"],
+                    "description": config.get("description", ""),
+                    "config_sha": sha,
+                }
+            )
+        except Exception:
+            continue
+
+    return sources
+
+
+def _generate_demo_data(
+    sources: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Generate realistic demo run and heal data for loaded sources."""
+    now = datetime.now(timezone.utc)
+    enriched_sources: list[dict[str, Any]] = []
+    runs: list[dict[str, Any]] = []
+    heals: list[dict[str, Any]] = []
+    run_id = 1
+
+    for source in sources:
+        name = source["name"]
+        is_broken = name == "demo-broken"
+
+        # Generate 3-5 runs per source over the last few days
+        num_runs = 3 if is_broken else 5
+        source_runs: list[dict[str, Any]] = []
+
+        for i in range(num_runs):
+            started = now - timedelta(hours=6 * (num_runs - i), minutes=2)
+            ended = started + timedelta(seconds=45 + i * 10)
+
+            if is_broken and i == num_runs - 1:
+                # Latest run for broken config: 0 items, error
+                run = {
+                    "id": run_id,
+                    "source": name,
+                    "started_at": started.isoformat(),
+                    "ended_at": ended.isoformat(),
+                    "items_new": 0,
+                    "items_updated": 0,
+                    "items_removed": 0,
+                    "status": "error",
+                    "error": "0 items extracted — selector span.nonexistent-class > a::text returned no matches",
+                }
+            elif is_broken:
+                run = {
+                    "id": run_id,
+                    "source": name,
+                    "started_at": started.isoformat(),
+                    "ended_at": ended.isoformat(),
+                    "items_new": 0,
+                    "items_updated": 0,
+                    "items_removed": 0,
+                    "status": "error",
+                    "error": "0 items extracted — selector mismatch",
+                }
+            else:
+                new_items = 30 - i * 3 if i == 0 else max(2, 8 - i)
+                run = {
+                    "id": run_id,
+                    "source": name,
+                    "started_at": started.isoformat(),
+                    "ended_at": ended.isoformat(),
+                    "items_new": new_items,
+                    "items_updated": i * 2,
+                    "items_removed": max(0, i - 2),
+                    "status": "ok",
+                    "error": None,
+                }
+
+            source_runs.append(run)
+            runs.append(run)
+            run_id += 1
+
+        # Determine latest status
+        latest_run = source_runs[-1]
+        total_items = sum(r["items_new"] for r in source_runs)
+
+        last_status = latest_run["status"]
+        if name == "demo-broken":
+            last_status = "healed"
+
+        enriched_sources.append(
+            {
+                **source,
+                "last_run_at": latest_run["started_at"],
+                "last_status": last_status,
+                "item_count": total_items,
+            }
+        )
+
+    # Generate a heal for the demo-broken source
+    heals.append(
+        {
+            "id": 1,
+            "source": "demo-broken",
+            "run_id": runs[-1]["id"] if runs else None,
+            "old_config": {
+                "field": "title",
+                "selector": "span.nonexistent-class > a::text",
+            },
+            "new_config": {
+                "field": "title",
+                "selector": "span.titleline > a::text",
+            },
+            "pr_url": "https://github.com/Abdul-Muizz1310/magpie-backend/pull/1",
+            "created_at": (now - timedelta(hours=1)).isoformat(),
+        }
+    )
+
+    return enriched_sources, runs, heals
+
+
+# ── Initialize data at startup ──────────────────────────────────────────────
+
+_raw_sources = _load_configs()
+_sources_store, _runs_store, _heals_store = _generate_demo_data(_raw_sources)
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
