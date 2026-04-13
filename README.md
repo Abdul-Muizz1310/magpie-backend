@@ -13,8 +13,8 @@
 ![neon](https://img.shields.io/badge/Neon-Postgres-00e599?style=flat-square&logo=postgresql&logoColor=white)
 ![r2](https://img.shields.io/badge/Cloudflare-R2-f38020?style=flat-square&logo=cloudflare&logoColor=white)
 [![ci](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml)
-![coverage](https://img.shields.io/badge/coverage-76%25-yellow?style=flat-square)
-![tests](https://img.shields.io/badge/tests-82%20passed-brightgreen?style=flat-square)
+![coverage](https://img.shields.io/badge/coverage-100%25-brightgreen?style=flat-square)
+![tests](https://img.shields.io/badge/tests-135%20passed-brightgreen?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
 
 ---
@@ -58,7 +58,7 @@ Scrapers break constantly. Selectors rot when sites redesign. The usual fix: som
 - ☁️ Cloudflare R2 for raw HTML snapshots
 - 🔎 FastAPI viewer API — 6 endpoints for sources, runs, heals, health
 - ⏰ GitHub Actions: CI + nightly scrape (6h cron) + heal-on-failure
-- 🧪 82 tests, 76% coverage, strict Pydantic validation
+- 🧪 135 tests, 100% line coverage, strict Pydantic validation
 - 📦 4 shipped configs: hackernews, arxiv-cs, weather-live, demo-broken
 
 ---
@@ -269,8 +269,8 @@ uv run pytest --cov=src/magpie --cov-report=term-missing
 
 | Metric | Value |
 |---|---|
-| **Test count** | 82 passed, 2 skipped (Playwright) |
-| **Coverage** | **76%** |
+| **Test count** | 135 tests |
+| **Line coverage** | **100%** |
 | **Config validation** | 4 YAML configs, 25 test cases (17 failure modes) |
 | **Hashing correctness** | 9 tests including unicode NFC, whitespace normalization |
 | **Dedupe accuracy** | 9 integration tests covering new/update/remove/reappear |
