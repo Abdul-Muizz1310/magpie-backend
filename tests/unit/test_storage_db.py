@@ -58,21 +58,28 @@ class TestGetSessionFactory:
 class TestCheckDb:
     @pytest.mark.asyncio
     async def test_check_db_returns_true_on_success(self) -> None:
+        mock_engine = MagicMock()
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock()
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("magpie.storage.db.AsyncSession", return_value=mock_session):
+        mock_session_cls = MagicMock(return_value=mock_session)
+        with (
+            patch("magpie.storage.db.get_engine", return_value=mock_engine),
+            patch("magpie.storage.db.AsyncSession", mock_session_cls),
+        ):
             result = await db_module.check_db()
         assert result is True
 
     @pytest.mark.asyncio
     async def test_check_db_returns_false_on_exception(self) -> None:
+        mock_engine = MagicMock()
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(side_effect=Exception("connection refused"))
-        mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("magpie.storage.db.AsyncSession", return_value=mock_session):
+        mock_session_cls = MagicMock(return_value=mock_session)
+        with (
+            patch("magpie.storage.db.get_engine", return_value=mock_engine),
+            patch("magpie.storage.db.AsyncSession", mock_session_cls),
+        ):
             result = await db_module.check_db()
         assert result is False
