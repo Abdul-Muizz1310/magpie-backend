@@ -249,5 +249,4 @@ async def list_heals(
     return heals[offset : offset + limit]
 
 
-
 # Health and version endpoints provided by platform/health.py via install_health_routes(app).

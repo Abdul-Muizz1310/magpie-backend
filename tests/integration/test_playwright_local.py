@@ -10,8 +10,8 @@ from magpie.config.schema import SourceConfig
 from magpie.playwright.runner import PlaywrightRunner
 
 try:
-    from playwright.async_api import async_playwright  # noqa: F401
     from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError
+    from playwright.async_api import async_playwright  # noqa: F401
 
     _HAS_PLAYWRIGHT = True
 except ImportError:

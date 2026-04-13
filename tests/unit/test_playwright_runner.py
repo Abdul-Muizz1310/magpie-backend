@@ -138,9 +138,7 @@ class TestPlaywrightRunnerRun:
         mock_page.wait_for_selector.assert_called_once_with("div.loaded", timeout=10000)
         mock_page.click.assert_called_once_with("button.more")
         mock_page.wait_for_timeout.assert_called_once_with(500)
-        mock_page.evaluate.assert_called_once_with(
-            "window.scrollTo(0, document.body.scrollHeight)"
-        )
+        mock_page.evaluate.assert_called_once_with("window.scrollTo(0, document.body.scrollHeight)")
         mock_page.fill.assert_called_once_with("input.search", "hello")
         mock_browser.close.assert_called_once()
 
@@ -165,9 +163,7 @@ class TestPlaywrightRunnerRun:
         mock_page.wait_for_selector.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_run_closes_browser_on_error(
-        self, _mock_playwright_module: ModuleType
-    ) -> None:
+    async def test_run_closes_browser_on_error(self, _mock_playwright_module: ModuleType) -> None:
         """Browser is closed even when page.goto raises."""
         cfg = _js_config_no_wait()
         runner = PlaywrightRunner(cfg)
