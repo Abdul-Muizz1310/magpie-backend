@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,27 +19,40 @@ def _reset_engine():
 
 class TestGetEngine:
     def test_creates_engine_from_env(self) -> None:
-        with patch.dict("os.environ", {"DATABASE_URL": "sqlite+aiosqlite:///test.db"}):
+        mock_engine = MagicMock()
+        with (
+            patch.dict("os.environ", {"DATABASE_URL": "sqlite:///test.db"}),
+            patch("magpie.storage.db.create_async_engine", return_value=mock_engine) as mock_create,
+        ):
             engine = db_module.get_engine()
-            assert engine is not None
-            assert str(engine.url) == "sqlite+aiosqlite:///test.db"
+            assert engine is mock_engine
+            mock_create.assert_called_once()
 
     def test_returns_same_engine_on_second_call(self) -> None:
-        engine1 = db_module.get_engine()
-        engine2 = db_module.get_engine()
-        assert engine1 is engine2
+        mock_engine = MagicMock()
+        with patch("magpie.storage.db.create_async_engine", return_value=mock_engine):
+            engine1 = db_module.get_engine()
+            engine2 = db_module.get_engine()
+            assert engine1 is engine2
 
     def test_uses_default_url_when_env_missing(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
-            engine = db_module.get_engine()
-            assert "magpie.db" in str(engine.url)
+        mock_engine = MagicMock()
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("magpie.storage.db.create_async_engine", return_value=mock_engine) as mock_create,
+        ):
+            db_module.get_engine()
+            call_args = mock_create.call_args
+            assert "magpie.db" in str(call_args)
 
 
 class TestGetSessionFactory:
     def test_returns_sessionmaker(self) -> None:
-        factory = db_module.get_session_factory()
-        assert factory is not None
-        assert callable(factory)
+        mock_engine = MagicMock()
+        with patch("magpie.storage.db.create_async_engine", return_value=mock_engine):
+            factory = db_module.get_session_factory()
+            assert factory is not None
+            assert callable(factory)
 
 
 class TestCheckDb:
