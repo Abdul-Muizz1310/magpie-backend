@@ -7,29 +7,130 @@ magpie is a config-driven scraping framework. A YAML file defines what to scrape
 ## System diagram
 
 ```mermaid
-graph TD
-  YAML["configs/*.yaml"] --> Loader["Config Loader<br/>(Pydantic validation)"]
-  Loader --> Factory{"render: true?"}
-  Factory -- "false" --> Scrapy["Scrapy Spider<br/>(static HTML)"]
-  Factory -- "true" --> PW["Playwright Runner<br/>(JS-rendered)"]
-  Scrapy --> Extract["Item Extraction<br/>(parsel CSS selectors)"]
-  PW --> Extract
-  Extract --> Hash["Content Hashing<br/>(SHA-256, normalized)"]
-  Hash --> Dedupe["Dedupe Pipeline<br/>(new / updated / removed)"]
-  Dedupe --> DB[("Neon Postgres<br/>(scrape branch)")]
-  Extract --> Archive["R2 Archive<br/>(raw HTML snapshot)"]
-  Dedupe --> Check{"items >= min_items?"}
-  Check -- "no" --> Healer["Healer"]
-  Check -- "yes" --> Done["Run complete"]
-  Healer --> LLM["OpenRouter LLM<br/>(selector fixer)"]
-  LLM --> Validate["Validator<br/>(run selector on snapshot)"]
-  Validate -- "valid" --> PR["GitHub PR<br/>(scrape:self-heal)"]
-  Validate -- "invalid" --> Log["Log error,<br/>skip PR"]
-  DB --> API["FastAPI Viewer API"]
-  API --> Sources["GET /sources"]
-  API --> Runs["GET /runs"]
-  API --> Heals["GET /heals"]
-  API --> Health["GET /health"]
+flowchart TD
+    YAML["configs/*.yaml"] --> Loader["Config Loader<br/>(Pydantic strict validation)"]
+    Loader --> Factory{"render: true?"}
+    Factory -- "false" --> Scrapy["Scrapy Spider<br/>(static HTML via parsel)"]
+    Factory -- "true" --> PW["Playwright Runner<br/>(JS-rendered pages)"]
+    Scrapy --> Extract["Item Extraction<br/>(CSS selectors via parsel)"]
+    PW --> Extract
+    Extract --> Archive["R2 Archive<br/>(raw HTML snapshot)"]
+    Extract --> Hash["Content Hashing<br/>(normalize → SHA-256)"]
+    Hash --> Dedupe["Dedupe Pipeline<br/>(new / updated / removed / reappeared)"]
+    Dedupe --> DB[("Neon Postgres<br/>(scrape branch)")]
+    Dedupe --> Check{"items >= health.min_items?"}
+    Check -- "no" --> Healer["Self-healing pipeline"]
+    Check -- "yes" --> Done["Run complete"]
+    Healer --> LLM["OpenRouter LLM<br/>(selector fixer)"]
+    LLM --> Validate["Validator<br/>(run selector on R2 snapshot)"]
+    Validate -- "valid" --> PR["GitHub PR<br/>(scrape:self-heal label)"]
+    Validate -- "invalid" --> Log["Log error, skip PR"]
+    DB --> API["FastAPI Viewer API"]
+    API --> Sources["GET /sources"]
+    API --> Runs["GET /runs"]
+    API --> Heals["GET /heals"]
+    API --> Health["GET /health"]
+```
+
+## Self-healing pipeline
+
+When a scrape run returns fewer items than `health.min_items`, the healer activates. It uses the most recent R2 HTML snapshot (archived before parsing) so the LLM can propose fixes against the actual page structure.
+
+```mermaid
+sequenceDiagram
+    participant Run as Scrape Run
+    participant Det as detector.py<br/>should_heal()
+    participant R2 as R2 Archive<br/>(HTML snapshot)
+    participant LLM as selector_fixer.py<br/>OpenRouter LLM
+    participant Val as validator.py
+    participant GH as github_pr.py
+
+    Run->>Det: item_count < min_items?
+    Det->>R2: Fetch latest snapshot for source
+    R2-->>Det: raw HTML
+    Det->>LLM: Broken selector + HTML + prompt<br/>(prompts/fix_selector.md)
+    LLM-->>Det: Proposed new CSS selector
+    Det->>Val: Run proposed selector on snapshot HTML
+    alt items found with new selector
+        Val-->>Det: Valid (N items extracted)
+        Det->>GH: Create/update PR with<br/>updated YAML config
+    else no items or error
+        Val-->>Det: Invalid
+        Det->>Run: Log error, no PR created
+    end
+```
+
+## Deduplication flow
+
+Each extracted item is normalized and hashed. The hash is compared against stored hashes for the same source to classify items into four categories.
+
+```mermaid
+flowchart TD
+    Items["Extracted items<br/>(list of dicts)"] --> Normalize["Normalize each item:<br/>strip whitespace<br/>Unicode NFC<br/>sort keys"]
+    Normalize --> Hash["SHA-256 hash<br/>per item"]
+    Hash --> Compare["Compare with stored<br/>hashes for source"]
+    Compare --> New["NEW<br/>hash not in DB"]
+    Compare --> Updated["UPDATED<br/>same dedupe_key,<br/>different hash"]
+    Compare --> Removed["REMOVED<br/>stored hash not<br/>in current run"]
+    Compare --> Reappeared["REAPPEARED<br/>soft-deleted item<br/>seen again"]
+    New --> Upsert["INSERT new row"]
+    Updated --> Upsert2["UPDATE content +<br/>hash + seen_last"]
+    Removed --> Soft["Soft-delete<br/>(set removed_at)"]
+    Reappeared --> Restore["Clear removed_at,<br/>update seen_last"]
+```
+
+## Config schema hierarchy
+
+All YAML configs are validated through a strict Pydantic model tree. `extra="forbid"` on every model catches typos at load time.
+
+```mermaid
+classDiagram
+    class SourceConfig {
+        +name: str (slug pattern)
+        +url: HttpUrl
+        +render: bool
+        +schedule: str
+        +rate_limit: RateLimitDef
+        +item: ItemDef
+        +pagination: PaginationDef
+        +wait_for: str | None
+        +actions: list~ActionDef~
+        +health: HealthDef
+    }
+    class ItemDef {
+        +container: str (CSS selector)
+        +fields: list~FieldDef~ (min 1)
+        +dedupe_key: str
+    }
+    class FieldDef {
+        +name: str
+        +selector: str
+        +attr: str | None
+    }
+    class PaginationDef {
+        +next: str | None
+        +max_pages: int (>= 1)
+    }
+    class ActionDef {
+        +type: click | wait | scroll | type
+        +selector: str | None
+        +ms: int | None
+        +text: str | None
+    }
+    class HealthDef {
+        +min_items: int (>= 0)
+        +max_staleness: str
+    }
+    class RateLimitDef {
+        +rps: int (>= 1)
+    }
+
+    SourceConfig *-- ItemDef
+    SourceConfig *-- PaginationDef
+    SourceConfig *-- HealthDef
+    SourceConfig *-- RateLimitDef
+    SourceConfig *-- "0..*" ActionDef
+    ItemDef *-- "1..*" FieldDef
 ```
 
 ## Directory structure
@@ -63,14 +164,14 @@ src/magpie/
 
 ## Data flow
 
-1. **Load** — YAML config validated into `SourceConfig` via Pydantic (strict, extra=forbid)
-2. **Dispatch** — Factory checks `render` flag, returns Scrapy spider class or PlaywrightRunner
-3. **Extract** — CSS selectors applied to HTML via parsel; items collected as dicts
-4. **Archive** — Raw HTML snapshot saved to R2 before parsing (healer needs this)
-5. **Hash** — Each item normalized (whitespace stripped, unicode NFC, keys sorted) and SHA-256 hashed
-6. **Dedupe** — Compare hashes against DB; classify as new / updated / removed
-7. **Persist** — Upsert items, update `seen_last`, soft-delete removed items
-8. **Heal** — If `item_count < health.min_items`, healer fires: LLM proposes new selector, validator checks it against the snapshot, and a GitHub PR is opened if valid
+1. **Load** -- YAML config validated into `SourceConfig` via Pydantic (strict, extra=forbid)
+2. **Dispatch** -- Factory checks `render` flag, returns Scrapy spider class or PlaywrightRunner
+3. **Extract** -- CSS selectors applied to HTML via parsel; items collected as dicts
+4. **Archive** -- Raw HTML snapshot saved to R2 before parsing (healer needs this)
+5. **Hash** -- Each item normalized (whitespace stripped, Unicode NFC, keys sorted) and SHA-256 hashed
+6. **Dedupe** -- Compare hashes against DB; classify as new / updated / removed / reappeared
+7. **Persist** -- Upsert items, update `seen_last`, soft-delete removed items
+8. **Heal** -- If `item_count < health.min_items`, healer fires: LLM proposes new selector, validator checks it against the snapshot, and a GitHub PR is opened if valid
 
 ## Key design decisions
 
@@ -81,3 +182,5 @@ src/magpie/
 | No auto-merge on heal PRs | Audit trail > convenience; broken selectors need human review |
 | File-based LLM prompts | Prompts in `prompts/*.md` with frontmatter, not inline strings |
 | `extra="forbid"` on all Pydantic models | Catches typos in YAML configs at load time |
+| R2 snapshots before parse | Healer needs the exact HTML the scraper saw, not a later fetch |
+| SHA-256 per item (not page) | Detects partial changes; one updated listing doesn't invalidate the whole run |

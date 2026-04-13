@@ -13,7 +13,7 @@ _engine: AsyncEngine | None = None
 
 def get_engine() -> AsyncEngine:
     """Get or create the async SQLAlchemy engine."""
-    global _engine  # noqa: PLW0603
+    global _engine
     if _engine is None:
         url = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///magpie.db")
         _engine = create_async_engine(url, echo=False)

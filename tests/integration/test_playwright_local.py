@@ -11,10 +11,12 @@ from magpie.playwright.runner import PlaywrightRunner
 
 try:
     from playwright.async_api import async_playwright  # noqa: F401
+    from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError
 
     _HAS_PLAYWRIGHT = True
 except ImportError:
     _HAS_PLAYWRIGHT = False
+    PlaywrightTimeoutError = TimeoutError  # type: ignore[misc,assignment]
 
 pytestmark = pytest.mark.skipif(not _HAS_PLAYWRIGHT, reason="Playwright browsers not installed")
 
@@ -87,5 +89,5 @@ class TestPlaywrightLocalIntegration:
             },
         )
         runner = PlaywrightRunner(cfg)
-        with pytest.raises(TimeoutError):
+        with pytest.raises(PlaywrightTimeoutError):
             await runner.run()

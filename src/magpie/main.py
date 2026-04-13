@@ -3,29 +3,21 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
 import yaml
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="magpie", description="YAML-defined scrapers that self-heal")
+from magpie.platform.health import install_health_routes
+from magpie.platform.middleware import install_middleware
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        os.environ.get("FRONTEND_URL", "https://magpie-frontend-three.vercel.app"),
-    ],
-    allow_methods=["GET"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="magpie", description="YAML-defined scrapers that self-heal")
+install_middleware(app)
+install_health_routes(app)
 
 _SOURCE_NAME_RE = re.compile(r"^[a-z0-9-]+$")
 
@@ -64,12 +56,6 @@ class HealResponse(BaseModel):
     created_at: str = ""
 
 
-class HealthResponse(BaseModel):
-    status: str
-    version: str = ""
-    db: str = "ok"
-
-
 # ── Data loading ────────────────────────────────────────────────────────────
 
 
@@ -105,7 +91,7 @@ def _generate_demo_data(
     sources: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Generate realistic demo run and heal data for loaded sources."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     enriched_sources: list[dict[str, Any]] = []
     runs: list[dict[str, Any]] = []
     heals: list[dict[str, Any]] = []
@@ -134,7 +120,10 @@ def _generate_demo_data(
                     "items_updated": 0,
                     "items_removed": 0,
                     "status": "error",
-                    "error": "0 items extracted — selector span.nonexistent-class > a::text returned no matches",
+                    "error": (
+                        "0 items extracted — selector"
+                        " span.nonexistent-class > a::text returned no matches"
+                    ),
                 }
             elif is_broken:
                 run = {
@@ -260,26 +249,5 @@ async def list_heals(
     return heals[offset : offset + limit]
 
 
-@app.get("/health", response_model=HealthResponse)
-async def health() -> dict[str, str]:
-    """Health check endpoint."""
-    db_status = "ok"
-    try:
-        from magpie.storage.db import check_db
 
-        if not await check_db():
-            db_status = "down"
-    except Exception:
-        db_status = "down"
-
-    return {
-        "status": "ok",
-        "version": os.environ.get("COMMIT_SHA", "dev"),
-        "db": db_status,
-    }
-
-
-@app.get("/version")
-async def version() -> dict[str, str]:
-    """Return the commit SHA."""
-    return {"version": os.environ.get("COMMIT_SHA", "dev")}
+# Health and version endpoints provided by platform/health.py via install_health_routes(app).
