@@ -56,7 +56,7 @@ async def _call_llm(
     """Call OpenRouter LLM to fix a broken selector."""
     api_key = os.environ.get("OPENROUTER_API_KEY", "")
     base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-    model = os.environ.get("OPENROUTER_MODEL_PRIMARY", "meta-llama/llama-3.3-70b-versatile")
+    model = os.environ.get("OPENROUTER_MODEL_PRIMARY", "meta-llama/llama-3.3-70b-instruct")
 
     prompt = (
         f"You are a web scraping expert. A CSS selector previously used to extract "

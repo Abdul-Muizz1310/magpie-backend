@@ -53,8 +53,11 @@ def build_spider_class(config: SourceConfig) -> type[scrapy.Spider]:
         }
 
         _config = config
-        _items: list[dict[str, Any]] = []
-        _pages_scraped = 0
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._items: list[dict[str, Any]] = []
+            self._pages_scraped: int = 0
 
         def parse(self, response: Response) -> Any:
             self._pages_scraped += 1

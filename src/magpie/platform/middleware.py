@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -10,18 +11,24 @@ from fastapi.middleware.cors import CORSMiddleware
 
 _Handler = Callable[[Request], Awaitable[Response]]
 
-ALLOWED_ORIGINS = [
+_PROD_ORIGINS = [
     "https://magpie-frontend.vercel.app",
     "https://bastion-six.vercel.app",
-    "http://localhost:3000",
 ]
+
+
+def _get_allowed_origins() -> list[str]:
+    origins = list(_PROD_ORIGINS)
+    if os.environ.get("APP_ENV", "development") != "production":
+        origins.append("http://localhost:3000")
+    return origins
 
 
 def install_middleware(app: FastAPI) -> None:
     """Attach CORS and request-id middleware to ``app``."""
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=ALLOWED_ORIGINS,
+        allow_origins=_get_allowed_origins(),
         allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
