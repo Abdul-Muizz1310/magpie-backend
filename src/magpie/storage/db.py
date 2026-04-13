@@ -20,9 +20,9 @@ def get_engine() -> AsyncEngine:
     return _engine
 
 
-def get_session_factory() -> sessionmaker:
+def get_session_factory() -> sessionmaker:  # type: ignore[type-arg]
     """Get a sessionmaker bound to the engine."""
-    return sessionmaker(get_engine(), class_=AsyncSession, expire_on_commit=False)
+    return sessionmaker(get_engine(), class_=AsyncSession, expire_on_commit=False)  # type: ignore[call-overload, no-any-return]
 
 
 async def check_db() -> bool:
