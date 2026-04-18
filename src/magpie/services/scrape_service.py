@@ -58,17 +58,13 @@ def _get_registered_source(name: str) -> SourceConfig:
 # ── Runner execution (imperative shell; replaced by mocks in tests) ─────────
 
 
-async def _execute_static(
-    config: SourceConfig, max_items: int
-) -> list[dict[str, Any]]:
+async def _execute_static(config: SourceConfig, max_items: int) -> list[dict[str, Any]]:
     """Run a Scrapy (static) scrape in a worker thread, cap to ``max_items``."""
     raw = await asyncio.to_thread(run_spider, config)
     return list(raw[:max_items])
 
 
-async def _execute_js(
-    config: SourceConfig, max_items: int
-) -> list[dict[str, Any]]:
+async def _execute_js(config: SourceConfig, max_items: int) -> list[dict[str, Any]]:
     """Run a Playwright (JS-rendered) scrape, cap to ``max_items``."""
     from magpie.playwright.runner import PlaywrightRunner
 
@@ -124,9 +120,7 @@ def _item_from_raw(raw: dict[str, Any], config: SourceConfig) -> ScrapeItem:
         content_hash=content_hash,
         fetched_at=datetime.now(UTC),
         html_snapshot_url=(
-            str(raw["html_snapshot_url"])
-            if isinstance(raw.get("html_snapshot_url"), str)
-            else None
+            str(raw["html_snapshot_url"]) if isinstance(raw.get("html_snapshot_url"), str) else None
         ),
     )
 

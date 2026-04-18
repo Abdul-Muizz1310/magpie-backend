@@ -70,9 +70,7 @@ class TestRunnerDispatch:
 
         captured: dict[str, object] = {}
 
-        async def _fake_execute(
-            config: SourceConfig, max_items: int
-        ) -> list[dict[str, Any]]:
+        async def _fake_execute(config: SourceConfig, max_items: int) -> list[dict[str, Any]]:
             captured["dispatched_config"] = config
             captured["scraper_kind"] = "scrapy"
             return [{"id": "a", "title": "t", "url": "https://example.com/a"}]
@@ -262,9 +260,7 @@ class TestBatchConcurrency:
 
         call_log: list[str] = []
 
-        async def _fake_execute(
-            config: SourceConfig, max_items: int
-        ) -> list[dict[str, Any]]:
+        async def _fake_execute(config: SourceConfig, max_items: int) -> list[dict[str, Any]]:
             call_log.append(config.name)
             if config.name == "middle":
                 # Yield to event loop so gather truly runs concurrently.
@@ -456,9 +452,7 @@ class TestDeriveContentTextFallback:
                 ),
             ),
         ):
-            result = await scrape_once(
-                source="test-static", max_items=10, run_repo=run_repo
-            )
+            result = await scrape_once(source="test-static", max_items=10, run_repo=run_repo)
 
         # "author" + "quote" (sorted) should be used, "id"/"url" skipped.
         assert result.items[0].content_text == "Ada\nHello"

@@ -114,9 +114,7 @@ class TestScrapeOnceHappyPath:
 
 class TestScrapeBatchHappyPath:
     @pytest.mark.asyncio
-    async def test_two_valid_sources_returns_200_with_two_runs(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_two_valid_sources_returns_200_with_two_runs(self, client: AsyncClient) -> None:
         fake_results = [_canned_result("hackernews"), _canned_result("arxiv-cs")]
         with patch(
             "magpie.api.routers.scrape.scrape_batch",
