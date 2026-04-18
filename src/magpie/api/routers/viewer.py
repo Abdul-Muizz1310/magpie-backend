@@ -151,27 +151,19 @@ async def list_heals(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[HealView]:
     repo = HealsRepository(session)
-    rows = await repo.list_all(source_name=source, limit=limit, offset=offset)
-    src_name_cache: dict[UUID, str] = {}
-    for row in rows:
-        if row.source_id not in src_name_cache:
-            src = await session.get(Source, row.source_id)
-            src_name_cache[row.source_id] = src.name if src else "unknown"
-
-    views: list[HealView] = []
-    for row in rows:
-        views.append(
-            HealView(
-                id=row.id,
-                source=src_name_cache[row.source_id],
-                run_id=row.run_id,
-                old_config={"field": row.field_name, "selector": row.old_selector},
-                new_config={"field": row.field_name, "selector": row.new_selector},
-                pr_url=row.pr_url,
-                created_at=row.created_at,
-            )
+    rows = await repo.list_all_with_source(source_name=source, limit=limit, offset=offset)
+    return [
+        HealView(
+            id=heal.id,
+            source=source_name,
+            run_id=heal.run_id,
+            old_config={"field": heal.field_name, "selector": heal.old_selector},
+            new_config={"field": heal.field_name, "selector": heal.new_selector},
+            pr_url=heal.pr_url,
+            created_at=heal.created_at,
         )
-    return views
+        for heal, source_name in rows
+    ]
 
 
 __all__ = ["RunStatus", "router"]

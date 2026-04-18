@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from magpie.api.deps import get_db_session
 from magpie.config.schema import SourceConfig
 from magpie.schemas.sources import SourceDetail, SourceSubmission, SourceSummary
-from magpie.storage.models import SourceOrigin
+from magpie.storage.models import Source, SourceOrigin
 from magpie.storage.sources_repo import (
     DuplicateSourceError,
     ImmutableSourceError,
@@ -77,7 +77,7 @@ def _parse_submission(body: SourceSubmission) -> tuple[SourceConfig, str]:
     return config, canonical_yaml
 
 
-def _summary(row) -> SourceSummary:  # type: ignore[no-untyped-def]
+def _summary(row: Source) -> SourceSummary:
     return SourceSummary(
         id=row.id,
         name=row.name,
@@ -89,7 +89,7 @@ def _summary(row) -> SourceSummary:  # type: ignore[no-untyped-def]
     )
 
 
-def _detail(row) -> SourceDetail:  # type: ignore[no-untyped-def]
+def _detail(row: Source) -> SourceDetail:
     return SourceDetail(
         id=row.id,
         name=row.name,

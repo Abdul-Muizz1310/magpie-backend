@@ -18,7 +18,13 @@ from procrastinate import RetryStrategy
 from magpie.queue.app import queue_app
 from magpie.services.scrape_service import ScrapeExecutionError, scrape_once
 from magpie.storage.db import get_session_factory
+from magpie.storage.runs_repo_pg import PgRunRepository
 from magpie.storage.sources_repo import SourcesRepository
+
+# A run that's been in ``running`` for longer than this is almost certainly
+# orphaned by a worker crash or a Render free-tier sleep. The reaper moves
+# those to ``error`` so the UI shows the truth.
+STALE_RUN_SECONDS = 30 * 60
 
 
 @queue_app.task(
@@ -90,4 +96,25 @@ async def heal_source_task(
     return outcome
 
 
-__all__ = ["heal_source_task", "scrape_source_task"]
+@queue_app.periodic(cron="*/15 * * * *")
+@queue_app.task(
+    name="magpie.reap_stale_runs",
+    queue="maintenance",
+)
+async def reap_stale_runs_task(timestamp: int) -> dict[str, Any]:
+    """Mark long-running rows as ``error`` — runs every 15 minutes.
+
+    Procrastinate's periodic decorator invokes the task with a unix
+    ``timestamp`` positional argument; we don't use it, but the parameter is
+    required by the decorator contract.
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        reaped = await PgRunRepository(session).mark_stale_running_as_error(
+            older_than_seconds=STALE_RUN_SECONDS,
+        )
+        await session.commit()
+    return {"reaped": reaped, "threshold_seconds": STALE_RUN_SECONDS}
+
+
+__all__ = ["heal_source_task", "reap_stale_runs_task", "scrape_source_task"]

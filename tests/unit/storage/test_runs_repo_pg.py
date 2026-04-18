@@ -75,6 +75,33 @@ class TestPgRunRepository:
         all_runs = await repo.list_runs(limit=10)
         assert len(all_runs) == 3
 
+    async def test_mark_stale_running_as_error(self, db_session) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        src = await _make_source(db_session)
+        repo = PgRunRepository(db_session)
+
+        fresh_run = await repo.create_queued(source_id=src.id, source_name=src.name)
+        await repo.mark_running(fresh_run.id)
+
+        old_run = await repo.create_queued(source_id=src.id, source_name=src.name)
+        old_run = await repo.mark_running(old_run.id)
+        # Shift the stale run's started_at backwards so it crosses the cutoff.
+        old_run.started_at = datetime.now(UTC) - timedelta(seconds=3600)
+        await db_session.flush()
+
+        reaped = await repo.mark_stale_running_as_error(older_than_seconds=1800)
+        assert reaped == 1
+
+        refreshed = await repo.get(old_run.id)
+        assert refreshed is not None
+        assert refreshed.status is RunStatus.error
+        assert "Stale run reaped" in (refreshed.error or "")
+
+        still_running = await repo.get(fresh_run.id)
+        assert still_running is not None
+        assert still_running.status is RunStatus.running
+
     async def test_latest_failed_runs(self, db_session) -> None:
         src = await _make_source(db_session)
         repo = PgRunRepository(db_session)

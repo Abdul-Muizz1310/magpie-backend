@@ -1,98 +1,103 @@
 # Demo Script
 
-Step-by-step demo for interviews. Total runtime: ~60 seconds.
+Step-by-step demo. Total runtime: ~90 seconds.
 
 ## Prerequisites
 
 ```bash
 git clone https://github.com/Abdul-Muizz1310/magpie-backend.git
 cd magpie-backend
-cp .env.example .env   # fill in OpenRouter key at minimum
+cp .env.example .env   # fill DATABASE_URL (Neon) + OPENROUTER_API_KEY
 uv sync
+uv run playwright install chromium
+uv run magpie migrate
+uv run magpie sync
 ```
 
 ## 1. Show the config (10s)
 
 Open `configs/hackernews.yaml`. Point out:
-- 20 lines of YAML defines a complete scraper
-- `render: false` means Scrapy (static HTML)
+- ~20 lines of YAML defines a complete scraper
+- `render: false` means httpx + parsel (static HTML path)
 - `item.fields` lists CSS selectors
 - `health.min_items: 20` is the healer threshold
 
-## 2. Run a scrape (10s)
+Then open `configs/wikipedia-current-events.yaml`:
+- Same schema, but `container_type: xpath` and `selector_type: xpath` per field
+- Demonstrates that CSS and XPath are first-class in the same schema
+
+## 2. Run a scrape synchronously (10s)
 
 ```bash
-uv run python -c "
-from magpie.config.loader import load_config_from_file
-from magpie.scrapy.factory import run_spider
-from pathlib import Path
-
-config = load_config_from_file(Path('configs/hackernews.yaml'))
-# Override to single page for demo speed
-config = config.model_copy(update={'pagination': {'max_pages': 1}})
-items = run_spider(config)
-print(f'Collected {len(items)} items')
-for item in items[:3]:
-    print(f'  {item[\"id\"]}: {item[\"title\"]}')
-"
+uv run magpie run hackernews
+# ok: source=hackernews run_id=<uuid> items=30
 ```
 
-Expected output: 30 items with titles and IDs.
+Then hit the viewer:
+```bash
+curl -s localhost:8000/runs?source=hackernews | jq '.[0]'
+```
 
 ## 3. Show deduplication (10s)
 
 ```bash
-uv run python -c "
-from magpie.storage.repo import ItemRepository
-
-repo = ItemRepository()
-items = [{'title': 'Article 1', 'id': '1'}, {'title': 'Article 2', 'id': '2'}]
-
-r1 = repo.persist_items('demo', items, dedupe_key='id')
-print(f'Run 1: {r1.items_new} new, {r1.items_updated} updated, {r1.items_removed} removed')
-
-r2 = repo.persist_items('demo', items, dedupe_key='id')
-print(f'Run 2: {r2.items_new} new, {r2.items_updated} updated, {r2.items_removed} removed')
-
-items[0]['title'] = 'Updated Title'
-r3 = repo.persist_items('demo', items, dedupe_key='id')
-print(f'Run 3: {r3.items_new} new, {r3.items_updated} updated, {r3.items_removed} removed')
-"
+uv run magpie run hackernews   # first run — items_new=30, items_updated=0
+uv run magpie run hackernews   # second run — items_new=0, items_updated=<few>
 ```
 
-Expected: Run 1 shows 2 new. Run 2 shows 0 changes. Run 3 shows 1 updated.
+The counts come from content-addressed hashing (SHA-256 + NFC). Re-running doesn't produce phantom updates.
 
-## 4. Show the healer logic (10s)
+## 4. Enqueue an async scrape (10s)
 
 ```bash
-uv run python -c "
-from magpie.healer.detector import should_heal
-from magpie.healer.validator import validate_selector
-from pathlib import Path
+# Start the API + embedded Procrastinate worker
+uv run uvicorn magpie.main:app &
 
-# Healer triggers when items < threshold
-print(f'0 items, min 20: heal={should_heal(item_count=0, min_items=20)}')
-print(f'30 items, min 20: heal={should_heal(item_count=30, min_items=20)}')
+curl -s -X POST localhost:8000/api/scrape/hackernews/enqueue | jq
+# { "run_id": "...", "job_id": "42", "source": "hackernews", "status": "queued" }
 
-# Validator checks selectors against HTML
-html = Path('fixtures/hackernews-v1.html').read_text()
-good = validate_selector(html, 'span.titleline > a')
-bad = validate_selector(html, 'span.nonexistent')
-print(f'Good selector: {len(good)} matches')
-print(f'Bad selector: {len(bad)} matches')
-"
+# Poll
+curl -s localhost:8000/api/runs/<run_id> | jq '.status'
+# "queued" → "running" → "ok"
 ```
 
-## 5. Show the broken config (10s)
+## 5. Submit a custom source with a broken selector (15s)
 
-Open `configs/demo-broken.yaml`. Point out `span.nonexistent-class` — deliberately wrong.
+```bash
+curl -s -X POST localhost:8000/api/sources \
+  -H "Content-Type: application/json" \
+  -d '{"yaml": "name: broken-demo\nurl: https://news.ycombinator.com\nschedule: \"0 0 * * 0\"\nitem:\n  container: \"tr.athing\"\n  fields:\n    - {name: title, selector: \".does-not-exist::text\"}\n    - {name: id, selector: \"::attr(id)\"}\n  dedupe_key: id\nhealth:\n  min_items: 20\n"}'
+```
 
-"When this runs and returns 0 items, the healer fires: it sends the raw HTML to an LLM, gets a proposed fix, validates it, and opens a GitHub PR. No auto-merge. You review the diff and approve."
+Then enqueue a scrape. The scrape succeeds but returns items with `title=null`. The queue task notices `items < health.min_items` and defers `heal_source_task`. The healer:
+1. Re-fetches the HTML (with a real User-Agent + follow_redirects).
+2. Runs the same extractor the scraper does. Finds `title` is `None` across every container match.
+3. Asks the LLM for a replacement selector, validates it against the HTML.
+4. Because this source is `origin=api`, it **writes the fix back to `sources.config_yaml`** in Postgres directly (no PR).
 
-## 6. Show the viewer API (10s)
+```bash
+curl -s localhost:8000/api/sources/broken-demo | jq .config_yaml
+# Shows the healed selector
+```
 
-Open browser to `https://magpie-backend-izzu.onrender.com/health`
+## 6. Show the heal history (5s)
 
-Then show `/sources`, `/runs`, `/heals` endpoints.
+```bash
+curl -s "localhost:8000/heals?source=broken-demo" | jq
+```
 
-"The frontend (magpie-frontend) consumes these endpoints to show a dashboard with run history and diff views."
+Each heal row records: field name, old + new selector, confidence, LLM reasoning, whether it was applied.
+
+## 7. Show the viewer API in a browser (10s)
+
+- `https://magpie-backend-izzu.onrender.com/sources` → source list
+- `https://magpie-backend-izzu.onrender.com/runs` → run history
+- `https://magpie-backend-izzu.onrender.com/heals` → heal history
+
+The frontend (magpie-frontend) consumes these.
+
+## 8. The weekly cron + heal-on-failure flow (optional)
+
+- `nightly-scrape.yml` runs every Sunday 00:00 UTC, matrix strategy over every file-origin config.
+- If any job fails, `heal-on-failure.yml` fires via `workflow_run` trigger, pulls the failed-run records from Postgres, and invokes the healer for each source.
+- File-origin sources get a GitHub PR labeled `scrape:self-heal`; api-origin sources get the fix written straight to `sources.config_yaml`.

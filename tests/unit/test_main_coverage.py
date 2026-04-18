@@ -31,8 +31,10 @@ class TestHealthDbDown:
             return_value=False,
         ):
             resp = await client.get("/health")
-            assert resp.status_code == 200
-            assert resp.json()["db"] == "down"
+            assert resp.status_code == 503
+            body = resp.json()
+            assert body["db"] == "down"
+            assert body["status"] == "degraded"
 
     async def test_health_db_exception(self, client: AsyncClient) -> None:
         with patch(
@@ -41,5 +43,17 @@ class TestHealthDbDown:
             side_effect=Exception("connection error"),
         ):
             resp = await client.get("/health")
-            assert resp.status_code == 200
+            assert resp.status_code == 503
             assert resp.json()["db"] == "down"
+
+    async def test_health_db_ok_returns_200(self, client: AsyncClient) -> None:
+        with patch(
+            "magpie.storage.db.check_db",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            resp = await client.get("/health")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["status"] == "ok"
+            assert body["db"] == "ok"

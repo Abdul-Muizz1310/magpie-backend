@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from magpie.core.hashing import compute_item_hash
-from magpie.storage.models import Item
+from magpie.storage.models import Item, Source
 from magpie.storage.repo import PersistResult
 
 
@@ -47,6 +47,14 @@ class PgItemRepository:
             dupes = {k for k in keys if keys.count(k) > 1}
             msg = f"Duplicate dedupe_keys in batch: {dupes}"
             raise ValueError(msg)
+
+        # Serialise concurrent persists of the same source so two scrapes
+        # can't race on the ``(source_id, dedupe_key)`` unique index. Postgres
+        # honours ``FOR UPDATE``; SQLite silently ignores it, which is fine for
+        # tests where there's no real concurrency.
+        await self._session.execute(
+            select(Source.id).where(Source.id == source_id).with_for_update()
+        )
 
         result = await self._session.execute(select(Item).where(Item.source_id == source_id))
         existing: dict[str, Item] = {row.dedupe_key: row for row in result.scalars().all()}

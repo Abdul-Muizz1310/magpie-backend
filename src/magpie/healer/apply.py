@@ -20,7 +20,7 @@ import httpx
 import yaml
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from magpie.config.schema import SourceConfig
+from magpie.config.schema import SelectorType, SourceConfig
 from magpie.healer.github_pr import create_heal_pr
 from magpie.healer.selector_fixer import fix_selector
 from magpie.healer.validator import validate_selector
@@ -159,7 +159,7 @@ async def _heal_target(
     config: SourceConfig,
     target: str,
     old_selector: str,
-    selector_type: str,
+    selector_type: SelectorType,
     html: str,
     healed_log: list[dict[str, Any]],
 ) -> SourceConfig | None:
@@ -201,7 +201,7 @@ async def _heal_target(
         return None
 
     new_selector = str(proposal["selector"])
-    samples = validate_selector(html, new_selector, selector_type)  # type: ignore[arg-type]
+    samples = validate_selector(html, new_selector, selector_type)
     if not samples:
         await _record_heal(
             session_factory=session_factory,

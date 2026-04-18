@@ -184,6 +184,51 @@ class TestContentNormalisation:
         assert result.items[0].content_text == nfc_text
 
 
+class TestDeduplicateItems:
+    """Unit tests for the first-wins dedup helper exercised by ``scrape_once``."""
+
+    def test_first_occurrence_wins(self) -> None:
+        from magpie.services.scrape_service import _deduplicate_items
+
+        items = [
+            {"id": "a", "title": "first"},
+            {"id": "a", "title": "second — should be dropped"},
+            {"id": "b", "title": "b1"},
+        ]
+        deduped = _deduplicate_items(items, "id")
+        assert deduped == [
+            {"id": "a", "title": "first"},
+            {"id": "b", "title": "b1"},
+        ]
+
+    def test_items_missing_dedupe_key_are_dropped(self) -> None:
+        from magpie.services.scrape_service import _deduplicate_items
+
+        items = [
+            {"id": "a", "title": "has id"},
+            {"title": "no id"},
+            {"id": None, "title": "null id"},
+        ]
+        deduped = _deduplicate_items(items, "id")
+        assert deduped == [{"id": "a", "title": "has id"}]
+
+    def test_empty_batch(self) -> None:
+        from magpie.services.scrape_service import _deduplicate_items
+
+        assert _deduplicate_items([], "id") == []
+
+    def test_numeric_keys_compared_as_strings(self) -> None:
+        """An int ``1`` and str ``"1"`` must hash to the same dedupe key."""
+        from magpie.services.scrape_service import _deduplicate_items
+
+        items = [
+            {"id": 1, "title": "as int"},
+            {"id": "1", "title": "as str"},
+        ]
+        deduped = _deduplicate_items(items, "id")
+        assert len(deduped) == 1
+
+
 class TestEmptyItems:
     async def test_empty_items_returns_gracefully(self, session_factory) -> None:
         await _seed(session_factory, _static_config())

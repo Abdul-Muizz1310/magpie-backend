@@ -18,7 +18,17 @@ _PROD_ORIGINS = [
 
 
 def _get_allowed_origins() -> list[str]:
+    """Compose the CORS origin list.
+
+    Baseline is the two hardcoded production frontends. ``FRONTEND_URL`` is
+    read at startup and appended if set — that lets a preview deploy CORS
+    through without code changes. Local dev (``APP_ENV != production``) also
+    gets ``http://localhost:3000``.
+    """
     origins = list(_PROD_ORIGINS)
+    extra = os.environ.get("FRONTEND_URL", "").strip()
+    if extra and extra not in origins:
+        origins.append(extra)
     if os.environ.get("APP_ENV", "development") != "production":
         origins.append("http://localhost:3000")
     return origins

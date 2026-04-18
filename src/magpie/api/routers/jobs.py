@@ -50,11 +50,25 @@ async def enqueue_scrape(
         await session.commit()
         run_id = run.id
 
-    job_id = await scrape_source_task.defer_async(
-        source=source,
-        max_items=request.max_items,
-        run_id=str(run_id),
-    )
+    # If deferring the task fails the queued row would otherwise sit forever
+    # with no worker ever picking it up. Mark it as errored so the API view is
+    # truthful and the operator has a breadcrumb.
+    try:
+        job_id = await scrape_source_task.defer_async(
+            source=source,
+            max_items=request.max_items,
+            run_id=str(run_id),
+        )
+    except Exception as exc:
+        async with factory() as session:
+            await PgRunRepository(session).mark_error(
+                run_id, error=f"failed to enqueue task: {exc}"
+            )
+            await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to enqueue scrape task",
+        ) from exc
 
     # Record the job_id for visibility once the deferral has a handle.
     async with factory() as session:

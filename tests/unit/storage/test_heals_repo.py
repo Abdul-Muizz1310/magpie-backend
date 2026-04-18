@@ -60,9 +60,11 @@ class TestHealsRepository:
                 pr_url="https://github.com/owner/repo/pull/1",
                 applied=False,
             )
-        only_a = await repo.list_all(source_name="a")
+        only_a = await repo.list_all_with_source(source_name="a")
         assert len(only_a) == 1
-        assert only_a[0].source_id == src_a.id
+        heal, name = only_a[0]
+        assert heal.source_id == src_a.id
+        assert name == "a"
 
     async def test_list_all_returns_all_rows(self, db_session) -> None:
         src = await _make_source(db_session)
@@ -82,8 +84,9 @@ class TestHealsRepository:
                 pr_url=None,
                 applied=False,
             )
-        all_heals = await repo.list_all()
+        all_heals = await repo.list_all_with_source()
         assert len(all_heals) == 3
         # We don't assert ordering beyond "most-recent-first by created_at" —
         # rows inserted in the same microsecond can tie, so assert the set.
-        assert {h.field_name for h in all_heals} == {"f0", "f1", "f2"}
+        assert {heal.field_name for heal, _name in all_heals} == {"f0", "f1", "f2"}
+        assert {name for _heal, name in all_heals} == {"src"}

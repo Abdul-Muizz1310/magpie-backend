@@ -1,4 +1,10 @@
-"""Platform endpoints — /health and /version."""
+"""Platform endpoints — /health and /version.
+
+``/health`` returns **503** when the database is unreachable so Render (or any
+container orchestrator) can take the instance out of rotation / restart it.
+Returning 200 with ``"db": "down"`` — the previous behaviour — made DB outages
+invisible to the platform.
+"""
 
 from __future__ import annotations
 
@@ -15,22 +21,23 @@ def install_health_routes(app: FastAPI) -> None:
 
     @app.get("/health", include_in_schema=False)
     async def _health() -> JSONResponse:
-        db_status = "ok"
+        db_ok = False
         try:
             from magpie.storage.db import check_db
 
-            if not await check_db():
-                db_status = "down"
+            db_ok = await check_db()
         except Exception:
-            db_status = "down"
+            db_ok = False
 
+        status_code = 200 if db_ok else 503
         return JSONResponse(
-            {
-                "status": "ok",
+            status_code=status_code,
+            content={
+                "status": "ok" if db_ok else "degraded",
                 "service": SERVICE_NAME,
                 "version": os.environ.get("COMMIT_SHA", "dev"),
-                "db": db_status,
-            }
+                "db": "ok" if db_ok else "down",
+            },
         )
 
     @app.get("/version", include_in_schema=False)

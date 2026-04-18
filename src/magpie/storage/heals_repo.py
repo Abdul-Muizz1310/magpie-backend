@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from magpie.storage.models import Heal, HealMode
+from magpie.storage.models import Heal, HealMode, Source
 
 
 class HealsRepository:
@@ -54,23 +54,26 @@ class HealsRepository:
         result = await self._session.execute(stmt)
         return result.scalars().all()
 
-    async def list_all(
+    async def list_all_with_source(
         self,
         *,
         source_name: str | None = None,
         limit: int = 20,
         offset: int = 0,
-    ) -> Sequence[Heal]:
-        from magpie.storage.models import Source as _Source
+    ) -> Sequence[tuple[Heal, str]]:
+        """Return heals paired with their source name in a single query.
 
+        The ``/heals`` viewer endpoint used to re-fetch Source per heal
+        (classic N+1); joining here keeps the query count at one.
+        """
         stmt = (
-            select(Heal)
-            .join(_Source, Heal.source_id == _Source.id)
+            select(Heal, Source.name)
+            .join(Source, Heal.source_id == Source.id)
             .order_by(desc(Heal.created_at))
             .limit(limit)
             .offset(offset)
         )
         if source_name is not None:
-            stmt = stmt.where(_Source.name == source_name)
+            stmt = stmt.where(Source.name == source_name)
         result = await self._session.execute(stmt)
-        return result.scalars().all()
+        return [(row[0], row[1]) for row in result.all()]

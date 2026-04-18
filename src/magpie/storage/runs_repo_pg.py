@@ -117,6 +117,31 @@ class PgRunRepository:
         result = await self._session.execute(stmt)
         return result.scalars().all()
 
+    async def mark_stale_running_as_error(self, *, older_than_seconds: int) -> int:
+        """Transition ``running`` rows older than ``older_than_seconds`` to error.
+
+        Used by the periodic reaper. Returns the number of rows touched so the
+        caller can log it. A worker crashing or the free-tier web instance
+        sleeping mid-scrape is exactly the kind of thing this catches.
+        """
+        from datetime import timedelta
+
+        cutoff = datetime.now(UTC) - timedelta(seconds=older_than_seconds)
+        result = await self._session.execute(
+            select(Run).where(Run.status == RunStatus.running).where(Run.started_at < cutoff)
+        )
+        stale = list(result.scalars().all())
+        for run in stale:
+            ended = datetime.now(UTC)
+            run.status = RunStatus.error
+            run.ended_at = ended
+            run.duration_ms = max(0, int((ended - run.started_at).total_seconds() * 1000))
+            run.error = (
+                f"Stale run reaped after {older_than_seconds}s in 'running' — assumed worker crash"
+            )
+        await self._session.flush()
+        return len(stale)
+
     async def _get(self, run_id: uuid.UUID) -> Run:
         run = await self._session.get(Run, run_id)
         if run is None:

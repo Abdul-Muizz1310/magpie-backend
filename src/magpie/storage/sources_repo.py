@@ -9,7 +9,6 @@ the caller's hands (FastAPI ``Depends`` or a queue task).
 from __future__ import annotations
 
 import hashlib
-import uuid
 from collections.abc import Sequence
 
 import yaml
@@ -57,9 +56,6 @@ class SourcesRepository:
     async def get_by_name(self, name: str) -> Source | None:
         result = await self._session.execute(select(Source).where(Source.name == name))
         return result.scalar_one_or_none()
-
-    async def get_by_id(self, source_id: uuid.UUID) -> Source | None:
-        return await self._session.get(Source, source_id)
 
     async def list_all(self, *, origin: SourceOrigin | None = None) -> Sequence[Source]:
         stmt = select(Source).order_by(Source.name)
