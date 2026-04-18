@@ -90,9 +90,7 @@ class TestSourceModel:
 class TestItemModel:
     async def test_unique_source_dedupe_key(self, session_factory) -> None:
         async with session_factory() as session:
-            src = Source(
-                name="a", origin=SourceOrigin.api, config_yaml="x", config_sha="1"
-            )
+            src = Source(name="a", origin=SourceOrigin.api, config_yaml="x", config_sha="1")
             session.add(src)
             await session.commit()
             await session.refresh(src)
@@ -123,9 +121,7 @@ class TestItemModel:
 class TestRunModel:
     async def test_run_status_defaults_to_queued(self, session_factory) -> None:
         async with session_factory() as session:
-            src = Source(
-                name="r", origin=SourceOrigin.file, config_yaml="x", config_sha="1"
-            )
+            src = Source(name="r", origin=SourceOrigin.file, config_yaml="x", config_sha="1")
             session.add(src)
             await session.commit()
             await session.refresh(src)
@@ -140,9 +136,7 @@ class TestRunModel:
 class TestHealModel:
     async def test_heal_insert_with_modes(self, session_factory) -> None:
         async with session_factory() as session:
-            src = Source(
-                name="h", origin=SourceOrigin.api, config_yaml="x", config_sha="1"
-            )
+            src = Source(name="h", origin=SourceOrigin.api, config_yaml="x", config_sha="1")
             session.add(src)
             await session.commit()
             await session.refresh(src)

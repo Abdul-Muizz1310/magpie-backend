@@ -152,9 +152,7 @@ async def create_source(body: SourceSubmission, session: _Session) -> SourceDeta
 
 
 @router.patch("/{name}", response_model=SourceDetail)
-async def update_source(
-    name: str, body: SourceSubmission, session: _Session
-) -> SourceDetail:
+async def update_source(name: str, body: SourceSubmission, session: _Session) -> SourceDetail:
     config, canonical = _parse_submission(body)
     if config.name != name:
         raise HTTPException(

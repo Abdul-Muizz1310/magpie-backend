@@ -37,9 +37,7 @@ class TestPgItemRepository:
     async def test_updated_items_counted(self, db_session) -> None:
         src = await _make_source(db_session)
         repo = PgItemRepository(db_session)
-        await repo.persist_items(
-            src.id, [{"id": "1", "title": "A"}], dedupe_key="id"
-        )
+        await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
         result = await repo.persist_items(
             src.id, [{"id": "1", "title": "A updated"}], dedupe_key="id"
         )
@@ -55,35 +53,27 @@ class TestPgItemRepository:
             [{"id": "1", "title": "A"}, {"id": "2", "title": "B"}],
             dedupe_key="id",
         )
-        result = await repo.persist_items(
-            src.id, [{"id": "1", "title": "A"}], dedupe_key="id"
-        )
+        result = await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
         assert result.items_removed == 1
-        rows = (await db_session.execute(select(Item).where(Item.source_id == src.id))).scalars().all()
+        rows = (
+            (await db_session.execute(select(Item).where(Item.source_id == src.id))).scalars().all()
+        )
         removed = {row.dedupe_key: row.removed for row in rows}
         assert removed["2"] is True
 
     async def test_reappearing_item_counted_as_new(self, db_session) -> None:
         src = await _make_source(db_session)
         repo = PgItemRepository(db_session)
-        await repo.persist_items(
-            src.id, [{"id": "1", "title": "A"}], dedupe_key="id"
-        )
+        await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
         await repo.persist_items(src.id, [], dedupe_key="id")  # mark 1 removed
-        result = await repo.persist_items(
-            src.id, [{"id": "1", "title": "A"}], dedupe_key="id"
-        )
+        result = await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
         assert result.items_new == 1
 
     async def test_unchanged_items_not_counted(self, db_session) -> None:
         src = await _make_source(db_session)
         repo = PgItemRepository(db_session)
-        await repo.persist_items(
-            src.id, [{"id": "1", "title": "A"}], dedupe_key="id"
-        )
-        result = await repo.persist_items(
-            src.id, [{"id": "1", "title": "A"}], dedupe_key="id"
-        )
+        await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
+        result = await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
         assert result.items_new == 0
         assert result.items_updated == 0
         assert result.items_removed == 0
@@ -109,8 +99,6 @@ class TestPgItemRepository:
         src_b = await _make_source(db_session, "b")
         repo = PgItemRepository(db_session)
         await repo.persist_items(src_a.id, [{"id": "1", "title": "A"}], dedupe_key="id")
-        result_b = await repo.persist_items(
-            src_b.id, [{"id": "1", "title": "B"}], dedupe_key="id"
-        )
+        result_b = await repo.persist_items(src_b.id, [{"id": "1", "title": "B"}], dedupe_key="id")
         assert result_b.items_new == 1
         assert result_b.items_removed == 0

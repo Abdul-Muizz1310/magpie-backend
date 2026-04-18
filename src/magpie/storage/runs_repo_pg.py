@@ -113,11 +113,7 @@ class PgRunRepository:
         return result.scalars().all()
 
     async def latest_failed_runs(self) -> Sequence[Run]:
-        stmt = (
-            select(Run)
-            .where(Run.status == RunStatus.error)
-            .order_by(desc(Run.started_at))
-        )
+        stmt = select(Run).where(Run.status == RunStatus.error).order_by(desc(Run.started_at))
         result = await self._session.execute(stmt)
         return result.scalars().all()
 

@@ -72,12 +72,7 @@ class HealView(BaseModel):
 
 async def _source_view(session: AsyncSession, source: Source) -> SourceView:
     # Most-recent run for this source.
-    stmt = (
-        select(Run)
-        .where(Run.source_id == source.id)
-        .order_by(Run.started_at.desc())
-        .limit(1)
-    )
+    stmt = select(Run).where(Run.source_id == source.id).order_by(Run.started_at.desc()).limit(1)
     latest = (await session.execute(stmt)).scalar_one_or_none()
 
     # Count non-removed items (cheap — indexed).

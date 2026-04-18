@@ -86,15 +86,9 @@ class Source(Base):
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
     )
 
-    runs: Mapped[list[Run]] = relationship(
-        back_populates="source", cascade="all, delete-orphan"
-    )
-    items: Mapped[list[Item]] = relationship(
-        back_populates="source", cascade="all, delete-orphan"
-    )
-    heals: Mapped[list[Heal]] = relationship(
-        back_populates="source", cascade="all, delete-orphan"
-    )
+    runs: Mapped[list[Run]] = relationship(back_populates="source", cascade="all, delete-orphan")
+    items: Mapped[list[Item]] = relationship(back_populates="source", cascade="all, delete-orphan")
+    heals: Mapped[list[Heal]] = relationship(back_populates="source", cascade="all, delete-orphan")
 
 
 class Run(Base):

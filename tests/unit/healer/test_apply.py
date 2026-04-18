@@ -36,9 +36,7 @@ async def _seed(session_factory, origin: SourceOrigin, name: str = "broken") -> 
     yaml_text = BROKEN_YAML.replace("broken", name)
     cfg = SourceConfig(**yaml.safe_load(yaml_text))
     async with session_factory() as session:
-        await SourcesRepository(session).create(
-            config=cfg, origin=origin, yaml_text=yaml_text
-        )
+        await SourcesRepository(session).create(config=cfg, origin=origin, yaml_text=yaml_text)
         await session.commit()
 
 
@@ -87,9 +85,7 @@ class TestHealApplyApiOrigin:
 
 
 class TestHealApplyFileOrigin:
-    async def test_file_origin_opens_pr_no_db_write(
-        self, session_factory
-    ) -> None:
+    async def test_file_origin_opens_pr_no_db_write(self, session_factory) -> None:
         await _seed(session_factory, SourceOrigin.file, name="file-src")
 
         with (
@@ -173,9 +169,7 @@ class TestHealApplyRejectsInvalidProposal:
             assert len(heals) == 1
             assert heals[0].applied is False
 
-    async def test_no_healing_needed_when_selector_still_matches(
-        self, session_factory
-    ) -> None:
+    async def test_no_healing_needed_when_selector_still_matches(self, session_factory) -> None:
         working_yaml = """\
 name: still-working
 url: https://example.com

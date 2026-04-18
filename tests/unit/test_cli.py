@@ -28,9 +28,7 @@ item:
 async def _seed(session_factory, origin: SourceOrigin = SourceOrigin.api) -> None:
     cfg = SourceConfig(**yaml.safe_load(SAMPLE_YAML))
     async with session_factory() as session:
-        await SourcesRepository(session).create(
-            config=cfg, origin=origin, yaml_text=SAMPLE_YAML
-        )
+        await SourcesRepository(session).create(config=cfg, origin=origin, yaml_text=SAMPLE_YAML)
         await session.commit()
 
 
@@ -59,9 +57,7 @@ class TestRunCommand:
         await _seed(session_factory)
         with patch(
             "magpie.services.scrape_service._execute_static",
-            new=AsyncMock(
-                return_value=[{"id": "a", "title": "t", "url": "https://example.com/a"}]
-            ),
+            new=AsyncMock(return_value=[{"id": "a", "title": "t", "url": "https://example.com/a"}]),
         ):
             rc = await cli_module._run_one("cli-src", max_items=5)
         assert rc == 0

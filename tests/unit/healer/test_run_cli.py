@@ -29,9 +29,7 @@ async def _seed_failed_run(session_factory) -> None:
     cfg = SourceConfig(**yaml.safe_load(SAMPLE_YAML))
     async with session_factory() as session:
         repo = SourcesRepository(session)
-        src = await repo.create(
-            config=cfg, origin=SourceOrigin.api, yaml_text=SAMPLE_YAML
-        )
+        src = await repo.create(config=cfg, origin=SourceOrigin.api, yaml_text=SAMPLE_YAML)
         run_repo = PgRunRepository(session)
         run = await run_repo.create_queued(source_id=src.id, source_name=src.name)
         await run_repo.mark_error(run.id, error="boom")
@@ -54,9 +52,7 @@ class TestHealCli:
         assert rc == 0
         assert mock_heal.await_count == 1
 
-    def test_main_no_failures_returns_zero(
-        self, session_factory, monkeypatch, capsys
-    ) -> None:
+    def test_main_no_failures_returns_zero(self, session_factory, monkeypatch, capsys) -> None:
         monkeypatch.setattr(heal_cli, "get_session_factory", lambda: session_factory)
         rc = heal_cli.main([])
         assert rc == 0

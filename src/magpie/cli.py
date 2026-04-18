@@ -77,9 +77,7 @@ async def _run_one(source: str, max_items: int) -> int:
     except ScrapeExecutionError as exc:
         print(f"error: scrape failed: {exc}", file=sys.stderr)
         return 1
-    print(
-        f"ok: source={result.source} run_id={result.run_id} items={len(result.items)}"
-    )
+    print(f"ok: source={result.source} run_id={result.run_id} items={len(result.items)}")
     return 0
 
 

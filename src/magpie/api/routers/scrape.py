@@ -58,9 +58,7 @@ async def scrape_source_once(
 
 
 @router.post("/batch", response_model=ScrapeBatchResponse)
-async def scrape_sources_batch(
-    body: ScrapeBatchRequest, factory: _Factory
-) -> ScrapeBatchResponse:
+async def scrape_sources_batch(body: ScrapeBatchRequest, factory: _Factory) -> ScrapeBatchResponse:
     """Synchronously run multiple registered scrapers concurrently."""
     runs, failed = await scrape_batch(
         sources=tuple(body.sources),

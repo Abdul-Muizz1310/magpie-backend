@@ -63,9 +63,7 @@ def in_memory_app():
 
 
 def _items(n: int, *, base: str = "https://example.com") -> list[dict]:
-    return [
-        {"id": f"k{i}", "title": f"t{i}", "url": f"{base}/{i}"} for i in range(n)
-    ]
+    return [{"id": f"k{i}", "title": f"t{i}", "url": f"{base}/{i}"} for i in range(n)]
 
 
 class TestScrapeSourceTask:

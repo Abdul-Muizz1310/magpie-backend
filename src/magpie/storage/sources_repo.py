@@ -88,8 +88,10 @@ class SourcesRepository:
         if existing is not None:
             raise DuplicateSourceError(config.name)
 
-        text = yaml_text if yaml_text is not None else yaml.safe_dump(
-            config.model_dump(mode="json"), sort_keys=False
+        text = (
+            yaml_text
+            if yaml_text is not None
+            else yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False)
         )
         source = Source(
             name=config.name,
@@ -116,8 +118,10 @@ class SourcesRepository:
         if source.origin is SourceOrigin.file and not allow_file_origin:
             raise ImmutableSourceError(name)
 
-        text = yaml_text if yaml_text is not None else yaml.safe_dump(
-            config.model_dump(mode="json"), sort_keys=False
+        text = (
+            yaml_text
+            if yaml_text is not None
+            else yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False)
         )
         source.description = config.description
         source.config_yaml = text

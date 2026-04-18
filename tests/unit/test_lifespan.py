@@ -33,9 +33,7 @@ class TestSyncFileSources:
         count = await lifespan_module._sync_file_sources_to_db()
         assert count == 0
 
-    async def test_sync_inserts_file_origin_rows(
-        self, isolated_configs, session_factory
-    ) -> None:
+    async def test_sync_inserts_file_origin_rows(self, isolated_configs, session_factory) -> None:
         (isolated_configs / "hacker.yaml").write_text(
             """\
 name: hacker
@@ -79,9 +77,7 @@ item:
             sources = await SourcesRepository(session).list_all()
             assert len(sources) == 1
 
-    async def test_sync_skips_invalid_yaml(
-        self, isolated_configs, session_factory
-    ) -> None:
+    async def test_sync_skips_invalid_yaml(self, isolated_configs, session_factory) -> None:
         (isolated_configs / "bad.yaml").write_text("{{ not valid", encoding="utf-8")
         (isolated_configs / "good.yaml").write_text(
             """\

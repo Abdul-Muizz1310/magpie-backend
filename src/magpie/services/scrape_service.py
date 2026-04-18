@@ -106,9 +106,7 @@ def _item_from_raw(raw: dict[str, Any], config: SourceConfig) -> ScrapeItem:
         content_hash=content_hash,
         fetched_at=datetime.now(UTC),
         html_snapshot_url=(
-            str(raw["html_snapshot_url"])
-            if isinstance(raw.get("html_snapshot_url"), str)
-            else None
+            str(raw["html_snapshot_url"]) if isinstance(raw.get("html_snapshot_url"), str) else None
         ),
     )
 

@@ -101,9 +101,7 @@ class TestEnqueueEndpoint:
         resp = await client.post("/api/scrape/ghost/enqueue", json={})
         assert resp.status_code == 404
 
-    async def test_enqueue_accepts_empty_body(
-        self, client: AsyncClient, seeded_source
-    ) -> None:
+    async def test_enqueue_accepts_empty_body(self, client: AsyncClient, seeded_source) -> None:
         with patch(
             "magpie.api.routers.jobs.scrape_source_task.defer_async",
             new=AsyncMock(return_value=99),
@@ -120,9 +118,7 @@ class TestGetRunEndpoint:
             src = await SourcesRepository(session).get_by_name("src")
             assert src is not None
             repo = PgRunRepository(session)
-            run = await repo.create_queued(
-                source_id=src.id, source_name=src.name, job_id="abc"
-            )
+            run = await repo.create_queued(source_id=src.id, source_name=src.name, job_id="abc")
             await session.commit()
             run_id = run.id
 

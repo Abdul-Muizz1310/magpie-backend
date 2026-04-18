@@ -94,5 +94,3 @@ async def get_run(run_id: uuid.UUID, session: _Session) -> RunView:
         error=row.error,
         job_id=row.job_id,
     )
-
-

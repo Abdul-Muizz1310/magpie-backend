@@ -50,11 +50,7 @@ class HealsRepository:
         return heal
 
     async def list_for_source(self, source_id: uuid.UUID) -> Sequence[Heal]:
-        stmt = (
-            select(Heal)
-            .where(Heal.source_id == source_id)
-            .order_by(desc(Heal.created_at))
-        )
+        stmt = select(Heal).where(Heal.source_id == source_id).order_by(desc(Heal.created_at))
         result = await self._session.execute(stmt)
         return result.scalars().all()
 

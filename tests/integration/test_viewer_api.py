@@ -57,9 +57,7 @@ async def seeded(session_factory):
         )
         runs = PgRunRepository(session)
         r1 = await runs.create_queued(source_id=source.id, source_name="hackernews")
-        await runs.mark_ok(
-            r1.id, item_count=3, items_new=3, items_updated=0, items_removed=0
-        )
+        await runs.mark_ok(r1.id, item_count=3, items_new=3, items_updated=0, items_removed=0)
         await HealsRepository(session).create(
             source_id=source.id,
             run_id=r1.id,

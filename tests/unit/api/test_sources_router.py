@@ -85,9 +85,7 @@ class TestCreateSource:
         resp = await client.post("/api/sources", json={"yaml": bad})
         assert resp.status_code == 422
 
-    async def test_duplicate_name_409(
-        self, client: AsyncClient, session_factory
-    ) -> None:
+    async def test_duplicate_name_409(self, client: AsyncClient, session_factory) -> None:
         await _seed(session_factory, "my-custom", SourceOrigin.api)
         resp = await client.post("/api/sources", json={"yaml": VALID_YAML})
         assert resp.status_code == 409
@@ -110,9 +108,7 @@ item:
 
 
 class TestListAndGetSources:
-    async def test_list_returns_all_by_default(
-        self, client: AsyncClient, session_factory
-    ) -> None:
+    async def test_list_returns_all_by_default(self, client: AsyncClient, session_factory) -> None:
         await _seed(session_factory, "api-1", SourceOrigin.api)
         await _seed(session_factory, "file-1", SourceOrigin.file)
         resp = await client.get("/api/sources")
@@ -120,9 +116,7 @@ class TestListAndGetSources:
         names = {s["name"] for s in resp.json()}
         assert names == {"api-1", "file-1"}
 
-    async def test_list_filters_by_origin(
-        self, client: AsyncClient, session_factory
-    ) -> None:
+    async def test_list_filters_by_origin(self, client: AsyncClient, session_factory) -> None:
         await _seed(session_factory, "api-1", SourceOrigin.api)
         await _seed(session_factory, "file-1", SourceOrigin.file)
         resp = await client.get("/api/sources?origin=api")
@@ -143,50 +137,36 @@ class TestListAndGetSources:
 
 
 class TestUpdateAndDelete:
-    async def test_patch_api_origin_updates(
-        self, client: AsyncClient, session_factory
-    ) -> None:
+    async def test_patch_api_origin_updates(self, client: AsyncClient, session_factory) -> None:
         await _seed(session_factory, "my-custom", SourceOrigin.api)
         new_yaml = VALID_YAML.replace("example.com", "updated.example.com")
         resp = await client.patch("/api/sources/my-custom", json={"yaml": new_yaml})
         assert resp.status_code == 200
         assert "updated.example.com" in resp.json()["config_yaml"]
 
-    async def test_patch_file_origin_409(
-        self, client: AsyncClient, session_factory
-    ) -> None:
+    async def test_patch_file_origin_409(self, client: AsyncClient, session_factory) -> None:
         await _seed(session_factory, "locked", SourceOrigin.file)
         new_yaml = _variant_yaml("locked").replace("example.com", "changed.com")
         resp = await client.patch("/api/sources/locked", json={"yaml": new_yaml})
         assert resp.status_code == 409
 
     async def test_patch_missing_404(self, client: AsyncClient) -> None:
-        resp = await client.patch(
-            "/api/sources/ghost", json={"yaml": _variant_yaml("ghost")}
-        )
+        resp = await client.patch("/api/sources/ghost", json={"yaml": _variant_yaml("ghost")})
         assert resp.status_code == 404
 
-    async def test_patch_path_name_mismatch_422(
-        self, client: AsyncClient, session_factory
-    ) -> None:
+    async def test_patch_path_name_mismatch_422(self, client: AsyncClient, session_factory) -> None:
         await _seed(session_factory, "a", SourceOrigin.api)
-        resp = await client.patch(
-            "/api/sources/a", json={"yaml": _variant_yaml("b")}
-        )
+        resp = await client.patch("/api/sources/a", json={"yaml": _variant_yaml("b")})
         assert resp.status_code == 422
 
-    async def test_delete_api_origin(
-        self, client: AsyncClient, session_factory
-    ) -> None:
+    async def test_delete_api_origin(self, client: AsyncClient, session_factory) -> None:
         await _seed(session_factory, "deletable", SourceOrigin.api)
         resp = await client.delete("/api/sources/deletable")
         assert resp.status_code == 204
         resp = await client.get("/api/sources/deletable")
         assert resp.status_code == 404
 
-    async def test_delete_file_origin_409(
-        self, client: AsyncClient, session_factory
-    ) -> None:
+    async def test_delete_file_origin_409(self, client: AsyncClient, session_factory) -> None:
         await _seed(session_factory, "locked", SourceOrigin.file)
         resp = await client.delete("/api/sources/locked")
         assert resp.status_code == 409

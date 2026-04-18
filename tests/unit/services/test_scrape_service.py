@@ -66,7 +66,9 @@ def _js_config(name: str = "test-js") -> SourceConfig:
     )
 
 
-async def _seed(session_factory, config: SourceConfig, origin: SourceOrigin = SourceOrigin.api) -> None:
+async def _seed(
+    session_factory, config: SourceConfig, origin: SourceOrigin = SourceOrigin.api
+) -> None:
     async with session_factory() as session:
         repo = SourcesRepository(session)
         await repo.create(
@@ -113,9 +115,7 @@ class TestRunnerDispatch:
             ) as exec_static,
             patch(
                 "magpie.services.scrape_service._execute_js",
-                new=AsyncMock(
-                    return_value=[{"id": "a", "title": "t", "url": "u"}]
-                ),
+                new=AsyncMock(return_value=[{"id": "a", "title": "t", "url": "u"}]),
             ) as exec_js,
         ):
             result = await scrape_once(
@@ -170,9 +170,7 @@ class TestContentNormalisation:
         with patch(
             "magpie.services.scrape_service._execute_static",
             new=AsyncMock(
-                return_value=[
-                    {"id": "1", "title": nfd_text, "url": "https://example.com/1"}
-                ]
+                return_value=[{"id": "1", "title": nfd_text, "url": "https://example.com/1"}]
             ),
         ):
             result = await scrape_once(
@@ -235,9 +233,7 @@ class TestItemRepoPersistence:
             )
 
         async with session_factory() as session:
-            rows = (
-                await session.execute(select(Run).order_by(Run.created_at))
-            ).scalars().all()
+            rows = (await session.execute(select(Run).order_by(Run.created_at))).scalars().all()
             assert len(rows) == 2
             assert (rows[0].items_new, rows[0].items_updated, rows[0].items_removed) == (
                 2,
@@ -354,9 +350,7 @@ class TestExecutorHelpers:
         import magpie.services.scrape_service as svc
 
         cfg = _static_config()
-        with patch.object(
-            svc, "run_spider", return_value=[{"id": str(i)} for i in range(10)]
-        ):
+        with patch.object(svc, "run_spider", return_value=[{"id": str(i)} for i in range(10)]):
             out = await svc._execute_static(cfg, max_items=3)
         assert len(out) == 3
 

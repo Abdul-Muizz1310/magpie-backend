@@ -24,9 +24,7 @@ class TestPgRunRepository:
     async def test_create_queued_defaults(self, db_session) -> None:
         src = await _make_source(db_session)
         repo = PgRunRepository(db_session)
-        run = await repo.create_queued(
-            source_id=src.id, source_name=src.name, job_id="job-1"
-        )
+        run = await repo.create_queued(source_id=src.id, source_name=src.name, job_id="job-1")
         assert run.status is RunStatus.queued
         assert run.job_id == "job-1"
         assert run.item_count == 0
