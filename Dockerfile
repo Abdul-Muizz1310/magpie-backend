@@ -7,22 +7,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends bash curl \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir uv
 
-# Layer 1 — resolve deps. Only invalidated when pyproject or lock changes.
+# Layer 1 — resolve + cache third-party deps without building the project
+# itself. ``--no-install-project`` skips the magpie package so we can defer
+# that to after src/ is copied, while still hitting the layer cache for
+# everything on the wire.
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Layer 2 — install Playwright chromium (sources with ``render: true``
-# require this, and the production image must carry it). Invalidated
-# together with the deps layer since playwright ships with uv.
+# require this, and the production image must carry it).
 RUN uv run playwright install chromium --with-deps
 
-# Layer 3 — application code. Source changes only invalidate this layer.
+# Layer 3 — application code. Source changes only invalidate from here down.
 COPY src/ src/
 COPY configs/ configs/
 COPY alembic/ alembic/
 COPY alembic.ini ./alembic.ini
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
+
+# Layer 4 — install magpie itself. Small + cheap now that deps are cached.
+RUN uv sync --frozen --no-dev
 
 # Bake commit SHA for /version.
 ARG COMMIT_SHA=unknown
