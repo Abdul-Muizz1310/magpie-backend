@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from magpie.api.deps import get_db_session
-from magpie.config.schema import SourceConfig
+from magpie.config.schema import SourceConfig, host_is_public
 from magpie.schemas.sources import SourceDetail, SourceSubmission, SourceSummary
 from magpie.storage.models import Source, SourceOrigin
 from magpie.storage.sources_repo import (
@@ -68,6 +68,16 @@ def _parse_submission(body: SourceSubmission) -> tuple[SourceConfig, str]:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=serialisable,
         ) from exc
+
+    # SSRF guard — gates user-submitted configs only. File-origin configs and
+    # unit-test fixtures reach ``SourceConfig`` through other code paths and
+    # are trusted to point at whatever they need.
+    host = config.url.host or ""
+    if not host_is_public(host):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"URL host {host!r} is not allowed (loopback/private/link-local)",
+        )
 
     canonical_yaml = (
         body.yaml

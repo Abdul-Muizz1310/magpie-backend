@@ -90,6 +90,22 @@ class TestCreateSource:
         resp = await client.post("/api/sources", json={"yaml": VALID_YAML})
         assert resp.status_code == 409
 
+    @pytest.mark.parametrize(
+        "bad_url",
+        [
+            "http://localhost/",
+            "http://127.0.0.1/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.5/",
+            "http://example.internal/",
+        ],
+    )
+    async def test_ssrf_guard_rejects_private_url(self, client: AsyncClient, bad_url: str) -> None:
+        attack = VALID_YAML.replace("https://example.com", bad_url)
+        resp = await client.post("/api/sources", json={"yaml": attack})
+        assert resp.status_code == 422
+        assert "not allowed" in resp.json()["detail"]
+
     async def test_xpath_source_accepted(self, client: AsyncClient) -> None:
         xpath_yaml = """\
 name: xpath-src

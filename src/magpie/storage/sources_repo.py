@@ -9,14 +9,27 @@ the caller's hands (FastAPI ``Depends`` or a queue task).
 from __future__ import annotations
 
 import hashlib
+import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 
 import yaml
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from magpie.config.schema import SourceConfig
-from magpie.storage.models import Source, SourceOrigin
+from magpie.storage.models import Item, Run, RunStatus, Source, SourceOrigin
+
+
+@dataclass(frozen=True)
+class SourceStats:
+    """Per-source aggregates used by the ``/sources`` viewer endpoint."""
+
+    source: Source
+    item_count: int
+    last_run_at: datetime | None
+    last_status: RunStatus | None
 
 
 def _compute_sha(yaml_text: str) -> str:
@@ -63,6 +76,63 @@ class SourcesRepository:
             stmt = stmt.where(Source.origin == origin)
         result = await self._session.execute(stmt)
         return result.scalars().all()
+
+    async def list_with_stats(self, *, origin: SourceOrigin | None = None) -> Sequence[SourceStats]:
+        """Return every source with its item_count + latest-run info.
+
+        Replaces the previous O(N) round-trips from the ``/sources`` view.
+        Three queries total, regardless of how many sources exist:
+          1. the Source rows themselves;
+          2. non-removed item counts via ``GROUP BY source_id``;
+          3. the most-recent ``runs`` row per source via a ROW_NUMBER()
+             window function.
+        """
+        sources = list(await self.list_all(origin=origin))
+        if not sources:
+            return []
+
+        source_ids = [s.id for s in sources]
+
+        count_stmt = (
+            select(Item.source_id, func.count(Item.id).label("n"))
+            .where(Item.source_id.in_(source_ids))
+            .where(Item.removed.is_(False))
+            .group_by(Item.source_id)
+        )
+        counts: dict[uuid.UUID, int] = {
+            row.source_id: int(row.n) for row in (await self._session.execute(count_stmt)).all()
+        }
+
+        rn = (
+            func.row_number()
+            .over(
+                partition_by=Run.source_id,
+                order_by=Run.started_at.desc(),
+            )
+            .label("rn")
+        )
+        ranked = (
+            select(Run.source_id, Run.started_at, Run.status, rn)
+            .where(Run.source_id.in_(source_ids))
+            .subquery()
+        )
+        latest_stmt = select(ranked.c.source_id, ranked.c.started_at, ranked.c.status).where(
+            ranked.c.rn == 1
+        )
+        latest: dict[uuid.UUID, tuple[datetime, RunStatus]] = {
+            row.source_id: (row.started_at, row.status)
+            for row in (await self._session.execute(latest_stmt)).all()
+        }
+
+        return [
+            SourceStats(
+                source=src,
+                item_count=counts.get(src.id, 0),
+                last_run_at=latest[src.id][0] if src.id in latest else None,
+                last_status=latest[src.id][1] if src.id in latest else None,
+            )
+            for src in sources
+        ]
 
     async def get_config(self, name: str) -> SourceConfig:
         source = await self.get_by_name(name)

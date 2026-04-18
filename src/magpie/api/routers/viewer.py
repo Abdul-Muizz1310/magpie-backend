@@ -21,7 +21,7 @@ from magpie.api.deps import get_db_session
 from magpie.storage.heals_repo import HealsRepository
 from magpie.storage.models import Item, Run, RunStatus, Source
 from magpie.storage.runs_repo_pg import PgRunRepository
-from magpie.storage.sources_repo import SourcesRepository
+from magpie.storage.sources_repo import SourcesRepository, SourceStats
 
 router = APIRouter(tags=["viewer"])
 
@@ -70,12 +70,22 @@ class HealView(BaseModel):
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
+def _source_view_from_stats(stats: SourceStats) -> SourceView:
+    return SourceView(
+        name=stats.source.name,
+        description=stats.source.description,
+        last_run_at=stats.last_run_at,
+        last_status=stats.last_status.value if stats.last_status else None,
+        item_count=stats.item_count,
+        config_sha=stats.source.config_sha,
+    )
+
+
 async def _source_view(session: AsyncSession, source: Source) -> SourceView:
-    # Most-recent run for this source.
+    """Single-source stats — used by ``GET /sources/{name}`` only."""
     stmt = select(Run).where(Run.source_id == source.id).order_by(Run.started_at.desc()).limit(1)
     latest = (await session.execute(stmt)).scalar_one_or_none()
 
-    # Count non-removed items (cheap — indexed).
     count_stmt = (
         select(func.count(Item.id))
         .where(Item.source_id == source.id)
@@ -112,9 +122,13 @@ def _run_view(row: Run) -> RunView:
 
 @router.get("/sources", response_model=list[SourceView])
 async def list_sources(session: _Session) -> list[SourceView]:
+    """List every source with its latest run + item count.
+
+    Uses :meth:`SourcesRepository.list_with_stats` so the query count stays at
+    three regardless of source count (was O(N) before).
+    """
     repo = SourcesRepository(session)
-    rows = await repo.list_all()
-    return [await _source_view(session, row) for row in rows]
+    return [_source_view_from_stats(stats) for stats in await repo.list_with_stats()]
 
 
 @router.get("/sources/{name}", response_model=SourceView)

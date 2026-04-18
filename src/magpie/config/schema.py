@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Literal
 
 from parsel import Selector as _ParselSelector
@@ -10,6 +11,53 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 SelectorType = Literal["css", "xpath"]
 
 _VALIDATION_HTML = "<html><body></body></html>"
+
+# Hostnames we refuse outright. Cloud metadata endpoints and Kubernetes /
+# Docker-compose service-discovery names go here too — they're a common SSRF
+# target. Hostnames that just look local (``*.local``, ``*.internal``) are
+# handled by suffix matching below.
+_BLOCKED_HOSTS = frozenset(
+    {
+        "localhost",
+        "metadata",
+        "metadata.google.internal",
+        "instance-data",
+        "kubernetes.default",
+        "kubernetes.default.svc",
+    }
+)
+_BLOCKED_SUFFIXES = (".local", ".internal", ".localdomain")
+
+
+def host_is_public(host: str) -> bool:
+    """Return False for hosts that would reach internal infrastructure.
+
+    Pragmatic syntactic guard used by the ``POST /api/sources`` endpoint —
+    user-submitted configs shouldn't be able to turn magpie into an SSRF
+    proxy. Tests and file-origin configs (which legitimately point at
+    127.0.0.1 fixture servers) go through ``SourceConfig`` directly and
+    bypass this check.
+
+    Rejects obvious targets (``127.0.0.1``, ``169.254.169.254``,
+    ``localhost``, ``*.internal``) without doing DNS at validation time. A
+    determined attacker can still point a public DNS record at a private
+    IP — catching that requires re-resolving at fetch time, which is a
+    future hardening.
+    """
+    if not host:
+        return False
+    host_lower = host.lower().strip("[]")  # strip IPv6 brackets if present
+    if host_lower in _BLOCKED_HOSTS:
+        return False
+    if any(host_lower.endswith(suffix) for suffix in _BLOCKED_SUFFIXES):
+        return False
+    try:
+        ip = ipaddress.ip_address(host_lower)
+    except ValueError:
+        # Regular hostname — we can't meaningfully block it without DNS.
+        return True
+    # is_global is the inverse of is_private | loopback | link_local | reserved.
+    return bool(ip.is_global)
 
 
 def _validate_selector(selector: str, selector_type: SelectorType) -> None:

@@ -152,3 +152,71 @@ class TestSourcesRepository:
         repo = SourcesRepository(db_session)
         with pytest.raises(SourceNotFoundError):
             await repo.get_config("ghost")
+
+
+class TestListWithStats:
+    """Aggregate query used by ``GET /sources``; verifies the N+1 replacement."""
+
+    async def test_empty_db_returns_empty(self, db_session) -> None:
+        repo = SourcesRepository(db_session)
+        assert await repo.list_with_stats() == []
+
+    async def test_sources_with_no_runs_or_items_default_to_zero(self, db_session) -> None:
+        repo = SourcesRepository(db_session)
+        cfg, text = _config()
+        await repo.create(config=cfg, origin=SourceOrigin.api, yaml_text=text)
+        await db_session.commit()
+
+        [stats] = await repo.list_with_stats()
+        assert stats.source.name == "mysource"
+        assert stats.item_count == 0
+        assert stats.last_run_at is None
+        assert stats.last_status is None
+
+    async def test_aggregates_pick_latest_run_and_live_items(self, db_session) -> None:
+        from magpie.storage.items_repo_pg import PgItemRepository
+        from magpie.storage.models import RunStatus
+        from magpie.storage.runs_repo_pg import PgRunRepository
+
+        repo = SourcesRepository(db_session)
+        cfg, text = _config("agg-source")
+        source = await repo.create(config=cfg, origin=SourceOrigin.api, yaml_text=text)
+
+        items_repo = PgItemRepository(db_session)
+        await items_repo.persist_items(
+            source.id,
+            [{"id": "1", "title": "a"}, {"id": "2", "title": "b"}],
+            dedupe_key="id",
+        )
+        # Mark item 2 as removed to prove item_count excludes it.
+        await items_repo.persist_items(source.id, [{"id": "1", "title": "a"}], dedupe_key="id")
+
+        runs_repo = PgRunRepository(db_session)
+        r1 = await runs_repo.create_queued(source_id=source.id, source_name=source.name)
+        await runs_repo.mark_ok(r1.id, item_count=2, items_new=2, items_updated=0, items_removed=0)
+        # Nudge the clock so r2's started_at is strictly later than r1's —
+        # otherwise two ``datetime.now(UTC)`` calls can collide on a fast
+        # machine and the ROW_NUMBER() tie-break is undefined.
+        import asyncio
+
+        await asyncio.sleep(0.01)
+        r2 = await runs_repo.create_queued(source_id=source.id, source_name=source.name)
+        await runs_repo.mark_error(r2.id, error="boom")
+        await db_session.commit()
+
+        [stats] = await repo.list_with_stats()
+        assert stats.source.name == "agg-source"
+        assert stats.item_count == 1  # id=2 was marked removed
+        assert stats.last_run_at is not None
+        assert stats.last_status is RunStatus.error  # latest of the two runs
+
+    async def test_list_with_stats_filters_by_origin(self, db_session) -> None:
+        repo = SourcesRepository(db_session)
+        cfg_a, text_a = _config("src-api")
+        cfg_b, text_b = _config("src-file")
+        await repo.create(config=cfg_a, origin=SourceOrigin.api, yaml_text=text_a)
+        await repo.create(config=cfg_b, origin=SourceOrigin.file, yaml_text=text_b)
+        await db_session.commit()
+
+        api_only = await repo.list_with_stats(origin=SourceOrigin.api)
+        assert {s.source.name for s in api_only} == {"src-api"}

@@ -18,10 +18,8 @@ Three GitHub Actions workflows:
 ### `nightly-scrape.yml`
 
 - **Trigger:** `schedule` (cron `0 0 * * 0` — weekly Sunday 00:00 UTC) + `workflow_dispatch` (manual)
-- **Strategy:** matrix over source names. Current list:
-  `hackernews`, `arxiv-cs`, `lobsters`, `huggingface-papers`, `github-trending`, `producthunt-today`, `wikipedia-current-events`
-  (`fail-fast: false` so one bad source doesn't abort the rest)
-- **Steps:** checkout, setup python 3.12, install uv, sync deps, conditionally install Playwright chromium (only `producthunt-today` today), apply Alembic migrations, run `magpie run <source>`.
+- **Strategy:** a `discover` job reads every `configs/*.yaml`, extracts the names, and emits two JSON arrays (`sources`, `js_sources`) as job outputs. The downstream `run` job's matrix is `fromJson(needs.discover.outputs.sources)` with `fail-fast: false`, so adding a new YAML automatically adds a CI leg with no workflow edit needed.
+- **Steps (per matrix leg):** checkout, setup python 3.12, install uv, sync deps, install Playwright chromium **only if the source appears in `js_sources`**, apply Alembic migrations, run `magpie run <source>`.
 - **Secrets needed:** `DATABASE_URL`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`.
 
 ### `heal-on-failure.yml`
@@ -40,6 +38,6 @@ Three GitHub Actions workflows:
 
 ## Operational notes
 
-- **Adding a new source** requires editing **two places**: a new file under `configs/`, and the matrix list in `nightly-scrape.yml`. Forgetting the matrix entry means the source gets picked up by `magpie sync` at service startup but never by the weekly cron.
+- **Adding a new source** is a one-file change — drop a YAML under `configs/`. The `discover` job picks it up on the next workflow run and the matrix expands automatically. If the new config is `render: true`, Playwright chromium is installed for that leg only; no workflow edit required.
 - **Manual trigger**: `gh workflow run nightly-scrape.yml --ref main` runs the whole matrix without waiting for Sunday.
 - **Healer can re-attempt**: re-running `heal-on-failure` is safe — PRs against the same branch (`heal/{source}`) are idempotent; db-patches are first-wins and won't duplicate records.

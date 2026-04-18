@@ -334,3 +334,49 @@ class TestSelectorValidation:
                     }
                 )
             )
+
+
+# ── host_is_public helper ────────────────────────────────────────────────────
+
+
+class TestHostIsPublic:
+    """Pure-function tests for the SSRF-guard helper.
+
+    The guard itself fires at the ``POST /api/sources`` boundary (see
+    ``tests/unit/api/test_sources_router.py``), not in ``SourceConfig``'s
+    validator — fixture-server tests need to keep binding to 127.0.0.1.
+    """
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "localhost",
+            "127.0.0.1",
+            "169.254.169.254",  # cloud metadata
+            "metadata.google.internal",
+            "10.0.0.5",
+            "192.168.1.1",
+            "172.16.0.10",
+            "::1",
+            "example.internal",
+            "host.local",
+        ],
+    )
+    def test_rejects_private_and_loopback(self, host: str) -> None:
+        from magpie.config.schema import host_is_public
+
+        assert host_is_public(host) is False
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "example.com",
+            "news.ycombinator.com",
+            "huggingface.co",
+            "8.8.8.8",
+        ],
+    )
+    def test_accepts_public(self, host: str) -> None:
+        from magpie.config.schema import host_is_public
+
+        assert host_is_public(host) is True

@@ -8,20 +8,54 @@ on:
       source:
         description: "Source name (blank = all)"
         required: false
+
 jobs:
+  # Discover the matrix from configs/*.yaml so adding a new config doesn't
+  # require editing this workflow. Emits two JSON arrays:
+  #   sources    — every config name
+  #   js_sources — sources with ``render: true`` (Playwright chromium only
+  #                installed for those to keep matrix cold-start fast).
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      sources: ${{ steps.find.outputs.sources }}
+      js_sources: ${{ steps.find.outputs.js_sources }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pyyaml
+      - id: find
+        shell: python
+        run: |
+          import json
+          import os
+          import pathlib
+
+          import yaml
+
+          all_sources: list[str] = []
+          js_sources: list[str] = []
+          for path in sorted(pathlib.Path("configs").glob("*.yaml")):
+              data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+              name = data.get("name")
+              if not name:
+                  continue
+              all_sources.append(name)
+              if data.get("render"):
+                  js_sources.append(name)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"sources={json.dumps(all_sources)}\n")
+              fh.write(f"js_sources={json.dumps(js_sources)}\n")
+
   run:
+    needs: discover
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        source:
-          - hackernews
-          - arxiv-cs
-          - lobsters
-          - huggingface-papers
-          - github-trending
-          - producthunt-today
-          - wikipedia-current-events
+        source: ${{ fromJson(needs.discover.outputs.sources) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,7 +63,7 @@ jobs:
       - run: pip install uv
       - run: uv sync --frozen
       - name: Install Playwright chromium
-        if: matrix.source == 'producthunt-today'
+        if: contains(fromJson(needs.discover.outputs.js_sources), matrix.source)
         run: uv run playwright install chromium --with-deps
       - name: Apply migrations (idempotent)
         run: uv run python -m magpie.cli migrate
