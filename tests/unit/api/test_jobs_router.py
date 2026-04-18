@@ -16,6 +16,7 @@ from httpx import ASGITransport, AsyncClient
 from magpie.api.deps import get_db_session, get_session_factory_dep
 from magpie.config.schema import SourceConfig
 from magpie.main import app
+from magpie.storage.items_repo_pg import PgItemRepository
 from magpie.storage.models import SourceOrigin
 from magpie.storage.runs_repo_pg import PgRunRepository
 from magpie.storage.sources_repo import SourcesRepository
@@ -135,4 +136,85 @@ class TestGetRunEndpoint:
 
     async def test_get_run_invalid_uuid_422(self, client: AsyncClient) -> None:
         resp = await client.get("/api/runs/not-a-uuid")
+        assert resp.status_code == 422
+
+
+class TestListRunItemsEndpoint:
+    async def test_lists_items_persisted_during_run(
+        self, client: AsyncClient, session_factory, seeded_source
+    ) -> None:
+        async with session_factory() as session:
+            src = await SourcesRepository(session).get_by_name("src")
+            assert src is not None
+            repo = PgRunRepository(session)
+            run = await repo.create_queued(source_id=src.id, source_name=src.name)
+            await PgItemRepository(session).persist_items(
+                src.id,
+                [
+                    {"id": "1", "title": "first", "url": "https://example.com/1"},
+                    {"id": "2", "title": "second", "url": "https://example.com/2"},
+                ],
+                dedupe_key="id",
+            )
+            await session.commit()
+            run_id = run.id
+
+        resp = await client.get(f"/api/runs/{run_id}/items")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body) == 2
+        titles = {item["title"] for item in body}
+        assert titles == {"first", "second"}
+        # stable_id is the dedupe_key value
+        assert {item["stable_id"] for item in body} == {"1", "2"}
+
+    async def test_missing_run_returns_404(self, client: AsyncClient) -> None:
+        resp = await client.get(f"/api/runs/{uuid.uuid4()}/items")
+        assert resp.status_code == 404
+
+    async def test_empty_when_no_items_persisted(
+        self, client: AsyncClient, session_factory, seeded_source
+    ) -> None:
+        async with session_factory() as session:
+            src = await SourcesRepository(session).get_by_name("src")
+            assert src is not None
+            run = await PgRunRepository(session).create_queued(
+                source_id=src.id, source_name=src.name
+            )
+            await session.commit()
+            run_id = run.id
+
+        resp = await client.get(f"/api/runs/{run_id}/items")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    async def test_respects_limit_and_offset(
+        self, client: AsyncClient, session_factory, seeded_source
+    ) -> None:
+        async with session_factory() as session:
+            src = await SourcesRepository(session).get_by_name("src")
+            assert src is not None
+            run = await PgRunRepository(session).create_queued(
+                source_id=src.id, source_name=src.name
+            )
+            await PgItemRepository(session).persist_items(
+                src.id,
+                [{"id": str(i), "title": f"t-{i}"} for i in range(5)],
+                dedupe_key="id",
+            )
+            await session.commit()
+            run_id = run.id
+
+        page1 = await client.get(f"/api/runs/{run_id}/items?limit=2&offset=0")
+        page2 = await client.get(f"/api/runs/{run_id}/items?limit=2&offset=2")
+        assert page1.status_code == 200
+        assert page2.status_code == 200
+        assert len(page1.json()) == 2
+        assert len(page2.json()) == 2
+        ids1 = {item["id"] for item in page1.json()}
+        ids2 = {item["id"] for item in page2.json()}
+        assert ids1.isdisjoint(ids2)
+
+    async def test_invalid_limit_422(self, client: AsyncClient, seeded_source) -> None:
+        resp = await client.get(f"/api/runs/{uuid.uuid4()}/items?limit=0")
         assert resp.status_code == 422

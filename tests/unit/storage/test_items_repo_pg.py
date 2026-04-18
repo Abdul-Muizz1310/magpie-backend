@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import select
 
@@ -102,3 +104,78 @@ class TestPgItemRepository:
         result_b = await repo.persist_items(src_b.id, [{"id": "1", "title": "B"}], dedupe_key="id")
         assert result_b.items_new == 1
         assert result_b.items_removed == 0
+
+
+class TestListInWindow:
+    async def test_returns_items_touched_in_window(self, db_session) -> None:
+        src = await _make_source(db_session)
+        repo = PgItemRepository(db_session)
+        started = datetime.now(UTC)
+        await repo.persist_items(
+            src.id,
+            [{"id": "1", "title": "A"}, {"id": "2", "title": "B"}],
+            dedupe_key="id",
+        )
+        ended = datetime.now(UTC) + timedelta(seconds=1)
+        items = await repo.list_in_window(
+            source_id=src.id, started_at=started, ended_at=ended
+        )
+        assert {i.dedupe_key for i in items} == {"1", "2"}
+
+    async def test_excludes_items_outside_window(self, db_session) -> None:
+        src = await _make_source(db_session)
+        repo = PgItemRepository(db_session)
+        await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
+        future_start = datetime.now(UTC) + timedelta(hours=1)
+        future_end = future_start + timedelta(hours=1)
+        items = await repo.list_in_window(
+            source_id=src.id, started_at=future_start, ended_at=future_end
+        )
+        assert list(items) == []
+
+    async def test_excludes_removed_items(self, db_session) -> None:
+        src = await _make_source(db_session)
+        repo = PgItemRepository(db_session)
+        started = datetime.now(UTC)
+        await repo.persist_items(
+            src.id,
+            [{"id": "1", "title": "A"}, {"id": "2", "title": "B"}],
+            dedupe_key="id",
+        )
+        # Drop item 2 — marks it removed.
+        await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
+        ended = datetime.now(UTC) + timedelta(seconds=1)
+        items = await repo.list_in_window(
+            source_id=src.id, started_at=started, ended_at=ended
+        )
+        assert {i.dedupe_key for i in items} == {"1"}
+
+    async def test_respects_limit_and_offset(self, db_session) -> None:
+        src = await _make_source(db_session)
+        repo = PgItemRepository(db_session)
+        started = datetime.now(UTC)
+        await repo.persist_items(
+            src.id,
+            [{"id": str(i), "title": f"item-{i}"} for i in range(5)],
+            dedupe_key="id",
+        )
+        ended = datetime.now(UTC) + timedelta(seconds=1)
+        page1 = await repo.list_in_window(
+            source_id=src.id, started_at=started, ended_at=ended, limit=2, offset=0
+        )
+        page2 = await repo.list_in_window(
+            source_id=src.id, started_at=started, ended_at=ended, limit=2, offset=2
+        )
+        assert len(page1) == 2
+        assert len(page2) == 2
+        assert {i.id for i in page1}.isdisjoint({i.id for i in page2})
+
+    async def test_ended_at_none_uses_now(self, db_session) -> None:
+        src = await _make_source(db_session)
+        repo = PgItemRepository(db_session)
+        started = datetime.now(UTC)
+        await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
+        items = await repo.list_in_window(
+            source_id=src.id, started_at=started, ended_at=None
+        )
+        assert len(items) == 1

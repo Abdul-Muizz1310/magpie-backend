@@ -9,10 +9,11 @@ still import ``storage.repo.ItemRepository`` without a DB.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from magpie.core.hashing import compute_item_hash
@@ -110,3 +111,36 @@ class PgItemRepository:
             items_updated=updated_count,
             items_removed=removed_count,
         )
+
+    async def list_in_window(
+        self,
+        *,
+        source_id: uuid.UUID,
+        started_at: datetime,
+        ended_at: datetime | None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Sequence[Item]:
+        """Return non-removed items touched during a run's time window.
+
+        An item belongs to a run if its ``last_seen_at`` falls within
+        ``[started_at, ended_at)`` — this covers new, reappeared, updated, and
+        unchanged-but-still-present items. ``ended_at`` defaults to "now" so
+        callers polling a running job still see items as they land.
+        """
+        upper = ended_at or datetime.now(UTC)
+        result = await self._session.execute(
+            select(Item)
+            .where(
+                and_(
+                    Item.source_id == source_id,
+                    Item.removed.is_(False),
+                    Item.last_seen_at >= started_at,
+                    Item.last_seen_at <= upper,
+                )
+            )
+            .order_by(desc(Item.last_seen_at))
+            .limit(limit)
+            .offset(offset)
+        )
+        return result.scalars().all()

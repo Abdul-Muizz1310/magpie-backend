@@ -33,3 +33,24 @@ class RunView(BaseModel):
     items_removed: int
     error: str | None = None
     job_id: str | None = None
+
+
+class RunItemView(BaseModel):
+    """A single item persisted during a run's time window.
+
+    Built from the ``items`` table (not the raw scrape payload), so fields can
+    be empty when the source's config does not populate them. The frontend
+    renders whichever fields are present.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: UUID
+    stable_id: str
+    url: str
+    title: str
+    content_text: str
+    content_hash: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+    html_snapshot_url: str | None = None
