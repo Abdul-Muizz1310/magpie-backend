@@ -14,11 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends bash curl \
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-# Layer 2 — install Playwright chromium (sources with ``render: true``
-# require this, and the production image must carry it).
-RUN uv run playwright install chromium --with-deps
-
-# Layer 3 — application code. Source changes only invalidate from here down.
+# Layer 2 — application code. Source changes only invalidate from here down.
 COPY src/ src/
 COPY configs/ configs/
 COPY alembic/ alembic/
@@ -26,8 +22,12 @@ COPY alembic.ini ./alembic.ini
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
-# Layer 4 — install magpie itself. Small + cheap now that deps are cached.
+# Layer 3 — install magpie itself. Small + cheap now that deps are cached.
 RUN uv sync --frozen --no-dev
+
+# Layer 4 — Playwright chromium + system deps. Runs after ``uv sync`` so
+# ``uv run`` doesn't try to re-sync against a half-built project.
+RUN uv run playwright install chromium --with-deps
 
 # Bake commit SHA for /version.
 ARG COMMIT_SHA=unknown
