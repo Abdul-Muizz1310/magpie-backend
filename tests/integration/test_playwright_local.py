@@ -10,13 +10,11 @@ from magpie.config.schema import SourceConfig
 from magpie.playwright.runner import PlaywrightRunner
 
 try:
-    from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError
     from playwright.async_api import async_playwright  # noqa: F401
 
     _HAS_PLAYWRIGHT = True
 except ImportError:
     _HAS_PLAYWRIGHT = False
-    PlaywrightTimeoutError = TimeoutError  # type: ignore[misc,assignment]
 
 pytestmark = pytest.mark.skipif(not _HAS_PLAYWRIGHT, reason="Playwright browsers not installed")
 
@@ -72,7 +70,16 @@ class TestPlaywrightLocalIntegration:
         assert all("name" in item for item in items)
 
     @pytest.mark.asyncio
-    async def test_handles_missing_wait_for_timeout(self, fixture_server: str) -> None:
+    async def test_handles_missing_wait_for_timeout(
+        self, fixture_server: str, caplog
+    ) -> None:
+        """wait_for_selector timeouts are now logged and the run continues.
+
+        The previous behaviour (propagate the exception) meant the healer
+        could never see the post-timeout HTML — it would only ever know
+        "timed out". Soft-failing lets the page's extraction run and gives
+        ``heal_source`` raw HTML to reason about.
+        """
         cfg = SourceConfig(
             name="test-timeout",
             url=f"{fixture_server}/fake-shop.html",
@@ -89,5 +96,8 @@ class TestPlaywrightLocalIntegration:
             },
         )
         runner = PlaywrightRunner(cfg)
-        with pytest.raises(PlaywrightTimeoutError):
-            await runner.run()
+        items = await runner.run()
+        # Extraction still happens — returns the shop's items since the page
+        # rendered fine; only the guard selector was missing.
+        assert items  # non-empty
+        assert any("wait_for_selector" in r.message for r in caplog.records)

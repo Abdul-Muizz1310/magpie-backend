@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
 from magpie.config.schema import SourceConfig
 from magpie.scrapy.factory import USER_AGENT, _extract_items_from_html
+
+log = logging.getLogger("magpie.playwright")
 
 
 class PlaywrightRunner:
@@ -37,7 +40,17 @@ class PlaywrightRunner:
                 await page.goto(str(self._config.url), wait_until="domcontentloaded")
 
                 if self._config.wait_for:
-                    await page.wait_for_selector(self._config.wait_for, timeout=10000)
+                    try:
+                        await page.wait_for_selector(self._config.wait_for, timeout=10000)
+                    except Exception as exc:
+                        # Don't abort the run — the healer needs the raw HTML to
+                        # propose a replacement selector. Log and press on.
+                        log.warning(
+                            "wait_for_selector %r timed out on %s: %s",
+                            self._config.wait_for,
+                            self._config.name,
+                            exc,
+                        )
 
                 for action in self._config.actions:
                     if action.type == "click" and action.selector:

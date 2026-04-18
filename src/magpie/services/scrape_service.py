@@ -91,6 +91,25 @@ def _normalize_and_hash(text: str) -> tuple[str, str]:
     return nfc, digest
 
 
+def _deduplicate_items(items: list[dict[str, Any]], dedupe_key: str) -> list[dict[str, Any]]:
+    """First-wins dedup on ``dedupe_key``; drop items missing the key.
+
+    Wikipedia's Current Events portal (and plenty of other sources) repeats
+    the same link across multiple bullets — if we passed both rows through to
+    ``persist_items`` the unique-constraint check would reject the whole batch
+    and the run would error out instead of returning what it could.
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    for item in items:
+        key = item.get(dedupe_key)
+        if key is None:
+            continue
+        k = str(key)
+        if k not in seen:
+            seen[k] = item
+    return list(seen.values())
+
+
 def _item_from_raw(raw: dict[str, Any], config: SourceConfig) -> ScrapeItem:
     dedupe_val = raw.get(config.item.dedupe_key)
     stable_id = str(dedupe_val) if dedupe_val is not None else ""
@@ -170,6 +189,8 @@ async def scrape_once(
             await runs.mark_error(run_id, error=str(exc), started_at=started_at)
             await session.commit()
         raise ScrapeExecutionError(str(exc)) from exc
+
+    raw_items = _deduplicate_items(raw_items, config.item.dedupe_key)
 
     async with session_factory() as session:
         items_repo = PgItemRepository(session)
