@@ -12,12 +12,14 @@ import yaml
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
+from magpie.api.routers.scrape import router as scrape_router
 from magpie.platform.health import install_health_routes
 from magpie.platform.middleware import install_middleware
 
 app = FastAPI(title="magpie", description="YAML-defined scrapers that self-heal")
 install_middleware(app)
 install_health_routes(app)
+app.include_router(scrape_router)
 
 _SOURCE_NAME_RE = re.compile(r"^[a-z0-9-]+$")
 
