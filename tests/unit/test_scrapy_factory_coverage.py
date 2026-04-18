@@ -113,6 +113,62 @@ class TestBuildSpiderClassParse:
         assert len(results) == 0
 
 
+class TestXPathExtraction:
+    """XPath container + XPath fields should extract equivalently to CSS."""
+
+    def test_extract_items_xpath_container_and_fields(self) -> None:
+        config = SourceConfig(
+            name="xpath-test",
+            url="https://example.com",
+            schedule="0 */6 * * *",
+            item={
+                "container": "//div[@class='card']",
+                "container_type": "xpath",
+                "fields": [
+                    {"name": "title", "selector": ".//h2/text()", "selector_type": "xpath"},
+                    {"name": "id", "selector": "./@data-id", "selector_type": "xpath"},
+                ],
+                "dedupe_key": "id",
+            },
+        )
+        html = """
+        <html><body>
+        <div class="card" data-id="1"><h2>One</h2></div>
+        <div class="card" data-id="2"><h2>Two</h2></div>
+        </body></html>
+        """
+        items = _extract_items_from_html(html, config)
+        assert len(items) == 2
+        assert items[0]["title"] == "One"
+        assert items[0]["id"] == "1"
+        assert items[1]["title"] == "Two"
+        assert items[1]["id"] == "2"
+
+    def test_extract_items_mixed_css_container_xpath_fields(self) -> None:
+        config = SourceConfig(
+            name="mixed-test",
+            url="https://example.com",
+            schedule="0 */6 * * *",
+            item={
+                "container": "div.card",
+                "fields": [
+                    {"name": "title", "selector": ".//h2/text()", "selector_type": "xpath"},
+                    {"name": "id", "selector": "::attr(data-id)"},
+                ],
+                "dedupe_key": "id",
+            },
+        )
+        html = """
+        <html><body>
+        <div class="card" data-id="A"><h2>Alpha</h2></div>
+        </body></html>
+        """
+        items = _extract_items_from_html(html, config)
+        assert len(items) == 1
+        assert items[0]["title"] == "Alpha"
+        assert items[0]["id"] == "A"
+
+
 class TestRunSpiderPaginationBranches:
     """Cover lines 110-114 of scrapy/factory.py (relative URL resolution)."""
 
@@ -167,6 +223,22 @@ class TestRunSpiderPaginationBranches:
         items = run_spider(config)
         # Only page 1 scraped since next link not found
         assert len(items) == 7
+
+    def test_xpath_pagination_follows_next(self, fixture_server: str) -> None:
+        """XPath pagination selector resolves just like the CSS path."""
+        config = load_config_from_file(CONFIGS / "hackernews.yaml")
+        config = config.model_copy(
+            update={
+                "url": f"{fixture_server}/hackernews-v1.html",
+                "pagination": PaginationDef(
+                    next="//a[@class='morelink']/@href",
+                    next_type="xpath",
+                    max_pages=2,
+                ),
+            }
+        )
+        items = run_spider(config)
+        assert len(items) >= 10
 
     def test_pagination_bare_relative_url(self, fixture_server: str) -> None:
         """Relative URL not starting with / or http is resolved via urljoin (lines 110-112)."""

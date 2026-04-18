@@ -22,6 +22,10 @@ jobs:
       - name: Install Playwright chromium
         if: matrix.source == 'weather-live'
         run: uv run playwright install chromium --with-deps
+      - name: Apply migrations (idempotent)
+        run: uv run python -m magpie.cli migrate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - run: uv run python -m magpie.cli run ${{ matrix.source }}
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

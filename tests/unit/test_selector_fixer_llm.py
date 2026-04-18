@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from magpie.healer.selector_fixer import _call_llm, fix_selector
 
@@ -49,6 +50,35 @@ class TestCallLlm:
 
         assert result["selector"] == "div.new"
         assert result["confidence"] == 0.9
+
+    @pytest.mark.asyncio
+    async def test_call_llm_rejects_malformed_response(self) -> None:
+        """LLM response missing required keys must raise at the parse boundary."""
+        bad_response = {"choices": [{"message": {"content": '{"only_a_selector": "div.new"}'}}]}
+        mock_resp = httpx.Response(
+            200,
+            json=bad_response,
+            request=httpx.Request("POST", "http://test"),
+        )
+
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_resp
+
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("magpie.healer.selector_fixer.httpx.AsyncClient", return_value=mock_ctx),
+            patch.dict("os.environ", {"OPENROUTER_API_KEY": "fake-key"}),
+            pytest.raises(ValidationError),
+        ):
+            await _call_llm(
+                field_name="title",
+                old_selector="span.old::text",
+                html="<html></html>",
+                old_samples=[],
+            )
 
     @pytest.mark.asyncio
     async def test_call_llm_raises_on_http_error(self) -> None:

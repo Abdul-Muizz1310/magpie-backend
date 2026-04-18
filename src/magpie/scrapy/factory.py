@@ -16,21 +16,31 @@ def _extract_items_from_html(html: str, config: SourceConfig) -> list[dict[str, 
     """Extract items from HTML using the config's selectors via parsel.
 
     Shared extraction logic used by both Scrapy spider and direct HTTP runs.
+    Supports both CSS (default) and XPath via ``*_type`` fields on the config.
     """
     sel = Selector(text=html)
     items: list[dict[str, Any]] = []
 
-    for element in sel.css(config.item.container):
+    container_matches = (
+        sel.css(config.item.container)
+        if config.item.container_type == "css"
+        else sel.xpath(config.item.container)
+    )
+
+    for element in container_matches:
         item: dict[str, Any] = {}
         for field in config.item.fields:
-            selector = field.selector
-            if "::text" in selector or "::attr" in selector:
-                values = element.css(selector).getall()
-            elif field.attr:
-                val = element.attrib.get(field.attr)
-                values = [val] if val else []
+            if field.selector_type == "xpath":
+                values = element.xpath(field.selector).getall()
             else:
-                values = element.css(selector).getall()
+                selector = field.selector
+                if "::text" in selector or "::attr" in selector:
+                    values = element.css(selector).getall()
+                elif field.attr:
+                    val = element.attrib.get(field.attr)
+                    values = [val] if val else []
+                else:
+                    values = element.css(selector).getall()
             item[field.name] = values[0] if values else None
         if any(v is not None for v in item.values()):
             items.append(item)
@@ -69,7 +79,12 @@ def build_spider_class(config: SourceConfig) -> type[scrapy.Spider]:
                 self._config.pagination.next
                 and self._pages_scraped < self._config.pagination.max_pages
             ):
-                next_url = response.css(self._config.pagination.next).get()
+                next_sel = self._config.pagination.next
+                next_url = (
+                    response.xpath(next_sel).get()
+                    if self._config.pagination.next_type == "xpath"
+                    else response.css(next_sel).get()
+                )
                 if next_url:
                     yield response.follow(next_url, callback=self.parse)
 
@@ -99,7 +114,11 @@ def run_spider(config: SourceConfig) -> list[dict[str, Any]]:
             # Follow pagination
             if config.pagination.next and pages_scraped < config.pagination.max_pages:
                 sel = Selector(text=html)
-                next_url = sel.css(config.pagination.next).get()
+                next_url = (
+                    sel.xpath(config.pagination.next).get()
+                    if config.pagination.next_type == "xpath"
+                    else sel.css(config.pagination.next).get()
+                )
                 if next_url:
                     # Resolve relative URLs
                     if next_url.startswith("/") or next_url.startswith("http"):

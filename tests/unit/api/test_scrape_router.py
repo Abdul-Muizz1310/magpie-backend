@@ -240,7 +240,12 @@ class TestScrapeOnceFailures:
     @pytest.mark.asyncio
     async def test_invalid_source_slug_in_path_is_404(self, client: AsyncClient) -> None:
         # "Bad%20Name" is both slug-invalid AND not registered — expect 404.
-        resp = await client.post("/api/scrape/Bad%20Name/once", json={})
+        with patch(
+            "magpie.api.routers.scrape.scrape_once",
+            new_callable=AsyncMock,
+            side_effect=UnknownSourceError("Bad Name"),
+        ):
+            resp = await client.post("/api/scrape/Bad%20Name/once", json={})
         assert resp.status_code == 404
 
     @pytest.mark.asyncio

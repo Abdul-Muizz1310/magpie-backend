@@ -1,13 +1,17 @@
 """POST /api/scrape/{source}/once and POST /api/scrape/batch.
 
-Router is a thin translation layer: parse request → call service → map typed
-result/exceptions to HTTP responses. No DB or scraping logic lives here.
+Thin translation layer: parse request → call service → map typed result /
+exceptions to HTTP responses. No DB or scraping logic lives here.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from typing import Annotated
 
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from magpie.api.deps import get_session_factory_dep
 from magpie.schemas.scrape import (
     ScrapeBatchRequest,
     ScrapeBatchResponse,
@@ -21,28 +25,25 @@ from magpie.services.scrape_service import (
     scrape_batch,
     scrape_once,
 )
-from magpie.storage.run_repo import RunRepository
 
 router = APIRouter(prefix="/api/scrape", tags=["scrape"])
 
-# Single process-wide repo. When a Postgres-backed implementation lands, swap
-# this for a FastAPI Depends() that yields a session-scoped instance.
-_run_repo = RunRepository()
+_Factory = Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory_dep)]
 
 
 @router.post("/{source}/once", response_model=ScrapeResult)
 async def scrape_source_once(
     source: str,
+    factory: _Factory,
     body: ScrapeOnceRequest | None = None,
 ) -> ScrapeResult:
     """Synchronously run one registered scraper and return its items."""
     request = body or ScrapeOnceRequest()
-
     try:
         return await scrape_once(
             source=source,
             max_items=request.max_items,
-            run_repo=_run_repo,
+            session_factory=factory,
         )
     except UnknownSourceError as exc:
         raise HTTPException(
@@ -57,12 +58,14 @@ async def scrape_source_once(
 
 
 @router.post("/batch", response_model=ScrapeBatchResponse)
-async def scrape_sources_batch(body: ScrapeBatchRequest) -> ScrapeBatchResponse:
+async def scrape_sources_batch(
+    body: ScrapeBatchRequest, factory: _Factory
+) -> ScrapeBatchResponse:
     """Synchronously run multiple registered scrapers concurrently."""
     runs, failed = await scrape_batch(
         sources=tuple(body.sources),
         max_items_per_source=body.max_items_per_source,
-        run_repo=_run_repo,
+        session_factory=factory,
     )
     return ScrapeBatchResponse(
         runs=tuple(runs),

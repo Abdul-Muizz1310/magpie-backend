@@ -206,3 +206,124 @@ class TestConfigFailures:
                     }
                 )
             )
+
+
+# ── XPath and selector validation ───────────────────────────────────────────
+
+
+class TestSelectorTypes:
+    def test_xpath_field_accepted(self) -> None:
+        cfg = SourceConfig(
+            **_minimal_config(
+                item={
+                    "container": "//div[@class='item']",
+                    "container_type": "xpath",
+                    "fields": [
+                        {"name": "title", "selector": ".//h2/text()", "selector_type": "xpath"},
+                    ],
+                    "dedupe_key": "title",
+                }
+            )
+        )
+        assert cfg.item.container_type == "xpath"
+        assert cfg.item.fields[0].selector_type == "xpath"
+
+    def test_default_selector_type_is_css(self) -> None:
+        cfg = SourceConfig(**_minimal_config())
+        assert cfg.item.container_type == "css"
+        assert cfg.item.fields[0].selector_type == "css"
+        assert cfg.pagination.next_type == "css"
+
+    def test_xpath_pagination_accepted(self) -> None:
+        cfg = SourceConfig(
+            **_minimal_config(
+                pagination={"next": "//a[@class='next']/@href", "next_type": "xpath"},
+            )
+        )
+        assert cfg.pagination.next_type == "xpath"
+
+    def test_mixed_css_container_xpath_fields(self) -> None:
+        cfg = SourceConfig(
+            **_minimal_config(
+                item={
+                    "container": "div.item",
+                    "fields": [
+                        {"name": "title", "selector": ".//h2/text()", "selector_type": "xpath"},
+                    ],
+                    "dedupe_key": "title",
+                }
+            )
+        )
+        assert cfg.item.container_type == "css"
+        assert cfg.item.fields[0].selector_type == "xpath"
+
+
+class TestSelectorValidation:
+    def test_invalid_css_rejected(self) -> None:
+        with pytest.raises((ValidationError, ValueError)):
+            SourceConfig(
+                **_minimal_config(
+                    item={
+                        "container": "div[[[garbage",
+                        "fields": [{"name": "title", "selector": "h2::text"}],
+                        "dedupe_key": "title",
+                    }
+                )
+            )
+
+    def test_invalid_xpath_rejected(self) -> None:
+        with pytest.raises((ValidationError, ValueError)):
+            SourceConfig(
+                **_minimal_config(
+                    item={
+                        "container": "//div[@",
+                        "container_type": "xpath",
+                        "fields": [{"name": "title", "selector": "h2::text"}],
+                        "dedupe_key": "title",
+                    }
+                )
+            )
+
+    def test_invalid_css_field_selector_rejected(self) -> None:
+        with pytest.raises((ValidationError, ValueError)):
+            SourceConfig(
+                **_minimal_config(
+                    item={
+                        "container": "div.item",
+                        "fields": [{"name": "title", "selector": "h2[[[bad"}],
+                        "dedupe_key": "title",
+                    }
+                )
+            )
+
+    def test_invalid_xpath_field_selector_rejected(self) -> None:
+        with pytest.raises((ValidationError, ValueError)):
+            SourceConfig(
+                **_minimal_config(
+                    item={
+                        "container": "div.item",
+                        "fields": [
+                            {"name": "title", "selector": "//h2[@", "selector_type": "xpath"},
+                        ],
+                        "dedupe_key": "title",
+                    }
+                )
+            )
+
+    def test_invalid_pagination_selector_rejected(self) -> None:
+        with pytest.raises((ValidationError, ValueError)):
+            SourceConfig(**_minimal_config(pagination={"next": "a[[broken"}))
+
+    def test_unknown_selector_type_rejected(self) -> None:
+        with pytest.raises((ValidationError, ValueError)):
+            SourceConfig(
+                **_minimal_config(
+                    item={
+                        "container": "div.item",
+                        "fields": [
+                            {"name": "title", "selector": "h2", "selector_type": "sizzle"},
+                        ],
+                        "dedupe_key": "title",
+                    }
+                )
+            )

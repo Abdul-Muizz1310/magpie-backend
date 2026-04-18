@@ -1,7 +1,10 @@
-"""Scrape orchestration — config lookup, runner dispatch, persistence.
+"""Scrape orchestration — DB-backed runs, configs, and items.
 
-The router layer calls into this module only. Keeping the pure async shape
-here means tests can drive it without spinning up HTTP or a browser.
+The router and the queue task both call this module. Repositories are read
+from and written to inside short-lived sessions created from the supplied
+``async_sessionmaker`` so the service owns its own transaction boundaries —
+important because a single scrape may run for tens of seconds, and we don't
+want to hold a DB transaction open the whole time.
 """
 
 from __future__ import annotations
@@ -11,14 +14,18 @@ import hashlib
 import unicodedata
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
-from magpie.config.loader import load_config_from_file
+from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from magpie.config.schema import SourceConfig
 from magpie.schemas.scrape import ScrapeFailure, ScrapeItem, ScrapeResult
 from magpie.scrapy.factory import run_spider
-from magpie.storage.run_repo import RunRecord, RunRepository
+from magpie.storage.items_repo_pg import PgItemRepository
+from magpie.storage.models import Source
+from magpie.storage.runs_repo_pg import PgRunRepository
+from magpie.storage.sources_repo import SourceNotFoundError, SourcesRepository
 
 # ── Typed exceptions ────────────────────────────────────────────────────────
 
@@ -35,37 +42,17 @@ class ScrapeExecutionError(Exception):
     """Raised when the underlying scraper runner fails hard."""
 
 
-# ── Config registry lookup (side-effecting, lives at the edge) ──────────────
-
-_CONFIGS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs"
-
-
-def _get_registered_source(name: str) -> SourceConfig:
-    """Resolve ``name`` to its validated ``SourceConfig`` or raise."""
-    if not _CONFIGS_DIR.is_dir():
-        raise UnknownSourceError(name)
-
-    target = _CONFIGS_DIR / f"{name}.yaml"
-    if not target.is_file():
-        raise UnknownSourceError(name)
-
-    try:
-        return load_config_from_file(target)
-    except Exception as exc:
-        raise UnknownSourceError(name) from exc
-
-
 # ── Runner execution (imperative shell; replaced by mocks in tests) ─────────
 
 
 async def _execute_static(config: SourceConfig, max_items: int) -> list[dict[str, Any]]:
-    """Run a Scrapy (static) scrape in a worker thread, cap to ``max_items``."""
+    """Run a static (httpx + parsel) scrape off the event loop and cap to ``max_items``."""
     raw = await asyncio.to_thread(run_spider, config)
     return list(raw[:max_items])
 
 
 async def _execute_js(config: SourceConfig, max_items: int) -> list[dict[str, Any]]:
-    """Run a Playwright (JS-rendered) scrape, cap to ``max_items``."""
+    """Run a Playwright scrape, cap to ``max_items``."""
     from magpie.playwright.runner import PlaywrightRunner
 
     runner = PlaywrightRunner(config)
@@ -73,15 +60,16 @@ async def _execute_js(config: SourceConfig, max_items: int) -> list[dict[str, An
     return list(raw[:max_items])
 
 
+async def _execute(config: SourceConfig, max_items: int) -> list[dict[str, Any]]:
+    return await (
+        _execute_js(config, max_items) if config.render else _execute_static(config, max_items)
+    )
+
+
 # ── Pure helpers ────────────────────────────────────────────────────────────
 
 
 def _derive_content_text(item: dict[str, Any]) -> str:
-    """Build the response ``content_text`` from a scraped item.
-
-    Prefers ``title`` + ``content`` when present; otherwise joins all non-None
-    string field values. Deterministic so the content hash is stable.
-    """
     parts: list[str] = []
     for key in ("title", "content", "body", "summary"):
         val = item.get(key)
@@ -98,14 +86,12 @@ def _derive_content_text(item: dict[str, Any]) -> str:
 
 
 def _normalize_and_hash(text: str) -> tuple[str, str]:
-    """Return (NFC-normalised text, SHA-256 of the normalised text)."""
     nfc = unicodedata.normalize("NFC", text)
     digest = hashlib.sha256(nfc.encode("utf-8")).hexdigest()
     return nfc, digest
 
 
 def _item_from_raw(raw: dict[str, Any], config: SourceConfig) -> ScrapeItem:
-    """Project a raw scraped dict into the API response shape."""
     dedupe_val = raw.get(config.item.dedupe_key)
     stable_id = str(dedupe_val) if dedupe_val is not None else ""
     url_val = raw.get("url")
@@ -120,9 +106,31 @@ def _item_from_raw(raw: dict[str, Any], config: SourceConfig) -> ScrapeItem:
         content_hash=content_hash,
         fetched_at=datetime.now(UTC),
         html_snapshot_url=(
-            str(raw["html_snapshot_url"]) if isinstance(raw.get("html_snapshot_url"), str) else None
+            str(raw["html_snapshot_url"])
+            if isinstance(raw.get("html_snapshot_url"), str)
+            else None
         ),
     )
+
+
+# ── Internal helpers for the DB-backed pipeline ─────────────────────────────
+
+
+async def _resolve_source(session: AsyncSession, name: str) -> tuple[Source, SourceConfig]:
+    repo = SourcesRepository(session)
+    row = await repo.get_by_name(name)
+    if row is None:
+        raise UnknownSourceError(name)
+    try:
+        config = await repo.get_config(name)
+    except SourceNotFoundError as exc:
+        raise UnknownSourceError(name) from exc
+    except (ValueError, ValidationError) as exc:
+        # Stored YAML was valid at write time but no longer validates — treat
+        # like an unknown source so the caller gets a clean 404/UnknownSource
+        # rather than a 500.
+        raise UnknownSourceError(name) from exc
+    return row, config
 
 
 # ── Public service API ──────────────────────────────────────────────────────
@@ -132,55 +140,63 @@ async def scrape_once(
     *,
     source: str,
     max_items: int,
-    run_repo: RunRepository,
+    session_factory: async_sessionmaker[AsyncSession],
+    run_id: uuid.UUID | None = None,
 ) -> ScrapeResult:
-    """Run one registered scraper, persist the run, return a typed result."""
-    config = _get_registered_source(source)
-    run_id = uuid.uuid4()
-    started_at = datetime.now(UTC)
+    """Run a scraper, record the run, persist its items.
 
-    try:
-        raw_items = (
-            await _execute_js(config, max_items)
-            if config.render
-            else await _execute_static(config, max_items)
-        )
-    except Exception as exc:
-        ended_at = datetime.now(UTC)
-        run_repo.record_run(
-            RunRecord(
-                run_id=str(run_id),
-                source=config.name,
-                started_at=started_at,
-                ended_at=ended_at,
-                item_count=0,
-                duration_ms=_duration_ms(started_at, ended_at),
-                status="error",
-                error=str(exc),
+    If ``run_id`` is supplied, the existing queued row is reused (this is how
+    the queue task flows — the enqueue path pre-creates the row so the caller
+    has a handle before the task starts). Otherwise a fresh row is created
+    here, mirroring the behaviour of the legacy sync endpoint.
+    """
+    async with session_factory() as session:
+        source_row, config = await _resolve_source(session, source)
+        runs = PgRunRepository(session)
+
+        if run_id is None:
+            run = await runs.create_queued(
+                source_id=source_row.id,
+                source_name=source_row.name,
             )
-        )
+            run_id = run.id
+        await runs.mark_running(run_id)
+        await session.commit()
+
+    started_at = datetime.now(UTC)
+    try:
+        raw_items = await _execute(config, max_items)
+    except Exception as exc:
+        async with session_factory() as session:
+            runs = PgRunRepository(session)
+            await runs.mark_error(run_id, error=str(exc), started_at=started_at)
+            await session.commit()
         raise ScrapeExecutionError(str(exc)) from exc
 
-    items = tuple(_item_from_raw(raw, config) for raw in raw_items)
-    ended_at = datetime.now(UTC)
-    run_repo.record_run(
-        RunRecord(
-            run_id=str(run_id),
-            source=config.name,
-            started_at=started_at,
-            ended_at=ended_at,
-            item_count=len(items),
-            duration_ms=_duration_ms(started_at, ended_at),
-            status="ok",
-            error=None,
+    async with session_factory() as session:
+        items_repo = PgItemRepository(session)
+        persist = await items_repo.persist_items(
+            source_row.id,
+            raw_items,
+            dedupe_key=config.item.dedupe_key,
         )
-    )
+        runs = PgRunRepository(session)
+        scrape_items = tuple(_item_from_raw(raw, config) for raw in raw_items)
+        await runs.mark_ok(
+            run_id,
+            item_count=len(scrape_items),
+            items_new=persist.items_new,
+            items_updated=persist.items_updated,
+            items_removed=persist.items_removed,
+            started_at=started_at,
+        )
+        await session.commit()
 
     return ScrapeResult(
-        source=config.name,
+        source=source_row.name,
         scraped_at=started_at,
         run_id=run_id,
-        items=items,
+        items=scrape_items,
     )
 
 
@@ -188,15 +204,15 @@ async def scrape_batch(
     *,
     sources: tuple[str, ...],
     max_items_per_source: int,
-    run_repo: RunRepository,
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> tuple[list[ScrapeResult], list[dict[str, str]]]:
-    """Run multiple scrapers concurrently with per-source isolation.
-
-    Returns (successful results, failure records). One source raising does
-    not abort the batch.
-    """
+    """Run multiple scrapers concurrently; one failure does not abort the rest."""
     tasks = [
-        scrape_once(source=name, max_items=max_items_per_source, run_repo=run_repo)
+        scrape_once(
+            source=name,
+            max_items=max_items_per_source,
+            session_factory=session_factory,
+        )
         for name in sources
     ]
     raw_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -212,14 +228,6 @@ async def scrape_batch(
     return runs, failed
 
 
-# ── Small internal helper ───────────────────────────────────────────────────
-
-
-def _duration_ms(start: datetime, end: datetime) -> int:
-    return max(0, int((end - start).total_seconds() * 1000))
-
-
-# Expose ScrapeFailure to ease router-layer imports in the future.
 __all__ = [
     "ScrapeExecutionError",
     "ScrapeFailure",

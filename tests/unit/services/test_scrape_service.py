@@ -1,7 +1,8 @@
-"""Service-level tests for scrape_service (spec 06-batch-scrape).
+"""Service-level tests for scrape_service (DB-backed).
 
-These tests drive the orchestration logic directly — config lookup,
-runner dispatch, persistence, normalisation, concurrency.
+These drive ``scrape_once`` / ``scrape_batch`` end-to-end against a SQLite
+session factory — the same interface Postgres uses in production — while
+mocking only the HTTP/Playwright boundaries.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import scrapy
+import yaml
+from sqlalchemy import select
 
 from magpie.config.schema import SourceConfig
 from magpie.services.scrape_service import (
@@ -22,12 +25,13 @@ from magpie.services.scrape_service import (
     scrape_batch,
     scrape_once,
 )
-from magpie.storage.run_repo import RunRepository
+from magpie.storage.models import Run, RunStatus, Source, SourceOrigin
+from magpie.storage.sources_repo import SourcesRepository
 
 
-def _static_source() -> SourceConfig:
+def _static_config(name: str = "test-static") -> SourceConfig:
     return SourceConfig(
-        name="test-static",
+        name=name,
         url="https://example.com",  # type: ignore[arg-type]
         render=False,
         schedule="0 */6 * * *",
@@ -43,9 +47,9 @@ def _static_source() -> SourceConfig:
     )
 
 
-def _js_source() -> SourceConfig:
+def _js_config(name: str = "test-js") -> SourceConfig:
     return SourceConfig(
-        name="test-js",
+        name=name,
         url="https://example.com",  # type: ignore[arg-type]
         render=True,
         wait_for="div.list",
@@ -62,27 +66,27 @@ def _js_source() -> SourceConfig:
     )
 
 
+async def _seed(session_factory, config: SourceConfig, origin: SourceOrigin = SourceOrigin.api) -> None:
+    async with session_factory() as session:
+        repo = SourcesRepository(session)
+        await repo.create(
+            config=config,
+            origin=origin,
+            yaml_text=yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False),
+        )
+        await session.commit()
+
+
 class TestRunnerDispatch:
-    @pytest.mark.asyncio
-    async def test_static_config_uses_scrapy_runner(self) -> None:
-        static_cfg = _static_source()
-        run_repo = RunRepository()
-
-        captured: dict[str, object] = {}
-
-        async def _fake_execute(config: SourceConfig, max_items: int) -> list[dict[str, Any]]:
-            captured["dispatched_config"] = config
-            captured["scraper_kind"] = "scrapy"
-            return [{"id": "a", "title": "t", "url": "https://example.com/a"}]
+    async def test_static_config_uses_scrapy_runner(self, session_factory) -> None:
+        await _seed(session_factory, _static_config())
 
         with (
             patch(
-                "magpie.services.scrape_service._get_registered_source",
-                return_value=static_cfg,
-            ),
-            patch(
                 "magpie.services.scrape_service._execute_static",
-                new=AsyncMock(side_effect=_fake_execute),
+                new=AsyncMock(
+                    return_value=[{"id": "a", "title": "t", "url": "https://example.com/a"}]
+                ),
             ) as exec_static,
             patch(
                 "magpie.services.scrape_service._execute_js",
@@ -92,37 +96,32 @@ class TestRunnerDispatch:
             result = await scrape_once(
                 source="test-static",
                 max_items=5,
-                run_repo=run_repo,
+                session_factory=session_factory,
             )
 
-        assert captured["scraper_kind"] == "scrapy"
         assert exec_static.await_count == 1
         assert exec_js.await_count == 0
         assert result.source == "test-static"
 
-    @pytest.mark.asyncio
-    async def test_js_config_uses_playwright_runner(self) -> None:
-        js_cfg = _js_source()
-        run_repo = RunRepository()
+    async def test_js_config_uses_playwright_runner(self, session_factory) -> None:
+        await _seed(session_factory, _js_config())
 
         with (
-            patch(
-                "magpie.services.scrape_service._get_registered_source",
-                return_value=js_cfg,
-            ),
             patch(
                 "magpie.services.scrape_service._execute_static",
                 new=AsyncMock(return_value=[]),
             ) as exec_static,
             patch(
                 "magpie.services.scrape_service._execute_js",
-                new=AsyncMock(return_value=[{"id": "a", "title": "t", "url": "u"}]),
+                new=AsyncMock(
+                    return_value=[{"id": "a", "title": "t", "url": "u"}]
+                ),
             ) as exec_js,
         ):
             result = await scrape_once(
                 source="test-js",
                 max_items=10,
-                run_repo=run_repo,
+                session_factory=session_factory,
             )
 
         assert exec_static.await_count == 0
@@ -131,139 +130,144 @@ class TestRunnerDispatch:
 
 
 class TestRunPersistence:
-    @pytest.mark.asyncio
-    async def test_service_writes_run_row(self) -> None:
-        cfg = _static_source()
-        run_repo = RunRepository()
+    async def test_service_writes_run_row(self, session_factory) -> None:
+        await _seed(session_factory, _static_config())
 
-        with (
-            patch(
-                "magpie.services.scrape_service._get_registered_source",
-                return_value=cfg,
-            ),
-            patch(
-                "magpie.services.scrape_service._execute_static",
-                new=AsyncMock(
-                    return_value=[
-                        {"id": "a", "title": "t1", "url": "https://example.com/a"},
-                        {"id": "b", "title": "t2", "url": "https://example.com/b"},
-                    ]
-                ),
+        with patch(
+            "magpie.services.scrape_service._execute_static",
+            new=AsyncMock(
+                return_value=[
+                    {"id": "a", "title": "t1", "url": "https://example.com/a"},
+                    {"id": "b", "title": "t2", "url": "https://example.com/b"},
+                ]
             ),
         ):
             result = await scrape_once(
                 source="test-static",
                 max_items=10,
-                run_repo=run_repo,
+                session_factory=session_factory,
             )
 
-        runs = run_repo.list_runs()
-        assert len(runs) == 1
-        row = runs[0]
-        assert row.source == "test-static"
-        assert row.status == "ok"
-        assert row.item_count == 2
-        assert row.duration_ms >= 0
-        # run_id in response matches persisted row
-        assert str(result.run_id) == row.run_id
+        async with session_factory() as session:
+            rows = (await session.execute(select(Run))).scalars().all()
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.source_name == "test-static"
+            assert row.status is RunStatus.ok
+            assert row.item_count == 2
+            assert row.duration_ms >= 0
+            assert row.id == result.run_id
 
 
 class TestContentNormalisation:
-    @pytest.mark.asyncio
-    async def test_content_text_nfc_normalised_before_hash(self) -> None:
-        cfg = _static_source()
-        run_repo = RunRepository()
+    async def test_content_text_nfc_normalised_before_hash(self, session_factory) -> None:
+        await _seed(session_factory, _static_config())
 
-        # "é" can be expressed as U+00E9 (NFC) or "e" + U+0301 (NFD).
         nfd_text = "caf" + "e" + "\u0301"
         nfc_text = unicodedata.normalize("NFC", nfd_text)
-        assert nfd_text != nfc_text  # sanity: inputs differ
+        assert nfd_text != nfc_text
 
-        with (
-            patch(
-                "magpie.services.scrape_service._get_registered_source",
-                return_value=cfg,
-            ),
-            patch(
-                "magpie.services.scrape_service._execute_static",
-                new=AsyncMock(
-                    return_value=[
-                        {
-                            "id": "1",
-                            "title": nfd_text,
-                            "url": "https://example.com/1",
-                        }
-                    ]
-                ),
+        with patch(
+            "magpie.services.scrape_service._execute_static",
+            new=AsyncMock(
+                return_value=[
+                    {"id": "1", "title": nfd_text, "url": "https://example.com/1"}
+                ]
             ),
         ):
             result = await scrape_once(
                 source="test-static",
                 max_items=10,
-                run_repo=run_repo,
+                session_factory=session_factory,
             )
 
-        expected_hash = hashlib.sha256(nfc_text.encode("utf-8")).hexdigest()
-        assert result.items[0].content_hash == expected_hash
+        expected = hashlib.sha256(nfc_text.encode("utf-8")).hexdigest()
+        assert result.items[0].content_hash == expected
         assert result.items[0].content_text == nfc_text
 
 
 class TestEmptyItems:
-    @pytest.mark.asyncio
-    async def test_empty_items_returns_gracefully(self) -> None:
-        cfg = _static_source()
-        run_repo = RunRepository()
-
-        with (
-            patch(
-                "magpie.services.scrape_service._get_registered_source",
-                return_value=cfg,
-            ),
-            patch(
-                "magpie.services.scrape_service._execute_static",
-                new=AsyncMock(return_value=[]),
-            ),
+    async def test_empty_items_returns_gracefully(self, session_factory) -> None:
+        await _seed(session_factory, _static_config())
+        with patch(
+            "magpie.services.scrape_service._execute_static",
+            new=AsyncMock(return_value=[]),
         ):
             result = await scrape_once(
                 source="test-static",
                 max_items=10,
-                run_repo=run_repo,
+                session_factory=session_factory,
+            )
+        assert result.items == ()
+        async with session_factory() as session:
+            rows = (await session.execute(select(Run))).scalars().all()
+            assert len(rows) == 1
+            assert rows[0].item_count == 0
+            assert rows[0].status is RunStatus.ok
+
+
+class TestItemRepoPersistence:
+    async def test_persist_counts_flow_into_run_record(self, session_factory) -> None:
+        await _seed(session_factory, _static_config())
+
+        first_batch = [
+            {"id": "a", "title": "A1", "url": "https://example.com/a"},
+            {"id": "b", "title": "B1", "url": "https://example.com/b"},
+        ]
+        second_batch = [
+            {"id": "a", "title": "A2 updated", "url": "https://example.com/a"},
+            {"id": "c", "title": "C1", "url": "https://example.com/c"},
+        ]
+
+        with patch(
+            "magpie.services.scrape_service._execute_static",
+            new=AsyncMock(side_effect=[first_batch, second_batch]),
+        ):
+            await scrape_once(
+                source="test-static",
+                max_items=10,
+                session_factory=session_factory,
+            )
+            await scrape_once(
+                source="test-static",
+                max_items=10,
+                session_factory=session_factory,
             )
 
-        assert result.items == ()
-        assert result.source == "test-static"
-        rows = run_repo.list_runs()
-        assert len(rows) == 1
-        assert rows[0].item_count == 0
-        assert rows[0].status == "ok"
+        async with session_factory() as session:
+            rows = (
+                await session.execute(select(Run).order_by(Run.created_at))
+            ).scalars().all()
+            assert len(rows) == 2
+            assert (rows[0].items_new, rows[0].items_updated, rows[0].items_removed) == (
+                2,
+                0,
+                0,
+            )
+            assert (rows[1].items_new, rows[1].items_updated, rows[1].items_removed) == (
+                1,
+                1,
+                1,
+            )
 
 
 class TestUnknownSource:
-    @pytest.mark.asyncio
-    async def test_unknown_source_raises_typed_error(self) -> None:
-        run_repo = RunRepository()
-        with (
-            patch(
-                "magpie.services.scrape_service._get_registered_source",
-                side_effect=UnknownSourceError("ghost"),
-            ),
-            pytest.raises(UnknownSourceError),
-        ):
-            await scrape_once(source="ghost", max_items=5, run_repo=run_repo)
+    async def test_unknown_source_raises(self, session_factory) -> None:
+        with pytest.raises(UnknownSourceError):
+            await scrape_once(
+                source="ghost",
+                max_items=5,
+                session_factory=session_factory,
+            )
 
 
 class TestBatchConcurrency:
-    @pytest.mark.asyncio
-    async def test_batch_isolates_one_failing_source(self) -> None:
-        cfg = _static_source()
-        run_repo = RunRepository()
-
-        call_log: list[str] = []
+    async def test_batch_isolates_one_failing_source(self, session_factory) -> None:
+        for name in ("first", "middle", "last"):
+            await _seed(session_factory, _static_config(name))
 
         async def _fake_execute(config: SourceConfig, max_items: int) -> list[dict[str, Any]]:
-            call_log.append(config.name)
             if config.name == "middle":
-                # Yield to event loop so gather truly runs concurrently.
                 await asyncio.sleep(0)
                 raise RuntimeError("boom")
             return [
@@ -274,24 +278,14 @@ class TestBatchConcurrency:
                 }
             ]
 
-        def _lookup(name: str) -> SourceConfig:
-            # Return a copy with the requested name.
-            return cfg.model_copy(update={"name": name})
-
-        with (
-            patch(
-                "magpie.services.scrape_service._get_registered_source",
-                side_effect=_lookup,
-            ),
-            patch(
-                "magpie.services.scrape_service._execute_static",
-                new=AsyncMock(side_effect=_fake_execute),
-            ),
+        with patch(
+            "magpie.services.scrape_service._execute_static",
+            new=AsyncMock(side_effect=_fake_execute),
         ):
             runs, failed = await scrape_batch(
                 sources=("first", "middle", "last"),
                 max_items_per_source=10,
-                run_repo=run_repo,
+                session_factory=session_factory,
             )
 
         assert len(runs) == 2
@@ -302,122 +296,75 @@ class TestBatchConcurrency:
 
 
 class TestScrapeExecutionError:
-    @pytest.mark.asyncio
-    async def test_runner_exception_wrapped_in_typed_error(self) -> None:
-        cfg = _static_source()
-        run_repo = RunRepository()
+    async def test_runner_exception_wrapped_and_persisted(self, session_factory) -> None:
+        await _seed(session_factory, _static_config())
 
         with (
-            patch(
-                "magpie.services.scrape_service._get_registered_source",
-                return_value=cfg,
-            ),
             patch(
                 "magpie.services.scrape_service._execute_static",
                 new=AsyncMock(side_effect=RuntimeError("network down")),
             ),
             pytest.raises(ScrapeExecutionError),
         ):
-            await scrape_once(source="test-static", max_items=5, run_repo=run_repo)
+            await scrape_once(
+                source="test-static",
+                max_items=5,
+                session_factory=session_factory,
+            )
 
-        # Failed run is still persisted.
-        runs = run_repo.list_runs()
-        assert len(runs) == 1
-        assert runs[0].status == "error"
+        async with session_factory() as session:
+            rows = (await session.execute(select(Run))).scalars().all()
+            assert len(rows) == 1
+            assert rows[0].status is RunStatus.error
+            assert rows[0].error is not None
 
 
 class TestSpiderClassSanity:
-    """Guard that the factory path we dispatch to actually returns a Scrapy class."""
-
     def test_static_factory_returns_scrapy_class(self) -> None:
         from magpie.factory import create_scraper
 
-        cls = create_scraper(_static_source())
+        cls = create_scraper(_static_config())
         assert isinstance(cls, type) and issubclass(cls, scrapy.Spider)
 
 
-class TestConfigRegistryLookup:
-    """Cover _get_registered_source branches (configs dir missing, yaml missing,
-    invalid yaml)."""
+class TestInvalidSourceInDb:
+    async def test_corrupt_yaml_raises_unknown_source(self, session_factory) -> None:
+        """If the stored YAML fails Pydantic validation, treat it as unknown."""
+        async with session_factory() as session:
+            session.add(
+                Source(
+                    name="broken",
+                    origin=SourceOrigin.api,
+                    config_yaml="name: broken\nurl: not-a-url\n",  # invalid url
+                    config_sha="x",
+                )
+            )
+            await session.commit()
 
-    def test_missing_configs_dir_raises_unknown_source(self, tmp_path: Any) -> None:
-        import magpie.services.scrape_service as svc
-
-        with (
-            patch.object(svc, "_CONFIGS_DIR", tmp_path / "does-not-exist"),
-            pytest.raises(UnknownSourceError),
-        ):
-            svc._get_registered_source("anything")
-
-    def test_missing_yaml_file_raises_unknown_source(self, tmp_path: Any) -> None:
-        import magpie.services.scrape_service as svc
-
-        (tmp_path / "configs").mkdir()
-        with (
-            patch.object(svc, "_CONFIGS_DIR", tmp_path / "configs"),
-            pytest.raises(UnknownSourceError),
-        ):
-            svc._get_registered_source("missing")
-
-    def test_invalid_yaml_raises_unknown_source(self, tmp_path: Any) -> None:
-        import magpie.services.scrape_service as svc
-
-        configs_dir = tmp_path / "configs"
-        configs_dir.mkdir()
-        (configs_dir / "broken.yaml").write_text("{{{not valid", encoding="utf-8")
-
-        with (
-            patch.object(svc, "_CONFIGS_DIR", configs_dir),
-            pytest.raises(UnknownSourceError),
-        ):
-            svc._get_registered_source("broken")
-
-    def test_valid_yaml_returns_source_config(self, tmp_path: Any) -> None:
-        import magpie.services.scrape_service as svc
-
-        configs_dir = tmp_path / "configs"
-        configs_dir.mkdir()
-        (configs_dir / "good.yaml").write_text(
-            """\
-name: good
-url: https://example.com
-schedule: 0 */6 * * *
-item:
-  container: tr.row
-  fields:
-    - {name: id, selector: "::attr(id)"}
-  dedupe_key: id
-""",
-            encoding="utf-8",
-        )
-
-        with patch.object(svc, "_CONFIGS_DIR", configs_dir):
-            cfg = svc._get_registered_source("good")
-        assert cfg.name == "good"
+        with pytest.raises(UnknownSourceError):
+            await scrape_once(
+                source="broken",
+                max_items=5,
+                session_factory=session_factory,
+            )
 
 
 class TestExecutorHelpers:
-    """Cover the thin _execute_static / _execute_js wrappers directly."""
-
-    @pytest.mark.asyncio
     async def test_execute_static_caps_items(self) -> None:
         import magpie.services.scrape_service as svc
 
-        cfg = _static_source()
+        cfg = _static_config()
         with patch.object(
-            svc,
-            "run_spider",
-            return_value=[{"id": str(i)} for i in range(10)],
+            svc, "run_spider", return_value=[{"id": str(i)} for i in range(10)]
         ):
             out = await svc._execute_static(cfg, max_items=3)
         assert len(out) == 3
 
-    @pytest.mark.asyncio
     async def test_execute_js_caps_items(self) -> None:
         import magpie.services.scrape_service as svc
         from magpie.playwright.runner import PlaywrightRunner
 
-        cfg = _js_source()
+        cfg = _js_config()
         fake_run = AsyncMock(return_value=[{"id": str(i)} for i in range(10)])
         with patch.object(PlaywrightRunner, "run", fake_run):
             out = await svc._execute_js(cfg, max_items=4)
@@ -425,34 +372,25 @@ class TestExecutorHelpers:
 
 
 class TestDeriveContentTextFallback:
-    """When no title/content/body/summary key is present, fall back to joining
-    all remaining string field values."""
-
-    @pytest.mark.asyncio
-    async def test_fallback_joins_generic_fields(self) -> None:
-        cfg = _static_source()
-        run_repo = RunRepository()
-
-        with (
-            patch(
-                "magpie.services.scrape_service._get_registered_source",
-                return_value=cfg,
-            ),
-            patch(
-                "magpie.services.scrape_service._execute_static",
-                new=AsyncMock(
-                    return_value=[
-                        {
-                            "id": "only-id",
-                            "url": "https://example.com/x",
-                            "author": "Ada",
-                            "quote": "Hello",
-                        }
-                    ]
-                ),
+    async def test_fallback_joins_generic_fields(self, session_factory) -> None:
+        await _seed(session_factory, _static_config())
+        with patch(
+            "magpie.services.scrape_service._execute_static",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "id": "only-id",
+                        "url": "https://example.com/x",
+                        "author": "Ada",
+                        "quote": "Hello",
+                    }
+                ]
             ),
         ):
-            result = await scrape_once(source="test-static", max_items=10, run_repo=run_repo)
+            result = await scrape_once(
+                source="test-static",
+                max_items=10,
+                session_factory=session_factory,
+            )
 
-        # "author" + "quote" (sorted) should be used, "id"/"url" skipped.
         assert result.items[0].content_text == "Ada\nHello"

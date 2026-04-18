@@ -1,4 +1,10 @@
-"""Tests for uncovered branches in main.py."""
+"""Residual main.py coverage tests.
+
+After the DB rewire, ``main.py`` is a thin router-registration shim. The old
+``_load_configs`` + demo-data helpers are gone (now in the ``viewer`` router
+and ``lifespan._sync_file_sources_to_db``). Only the /health DB-down paths
+are still worth covering here.
+"""
 
 from __future__ import annotations
 
@@ -17,69 +23,8 @@ async def client():
         yield c
 
 
-class TestLoadConfigsBranches:
-    """Cover lines 82, 89, 98-99 in _load_configs by patching the configs dir path."""
-
-    def test_no_configs_dir_returns_empty(self, tmp_path) -> None:
-        """When configs_dir doesn't exist, return empty list (line 82)."""
-        import magpie.main as main_module
-
-        fake_path = tmp_path / "src" / "magpie" / "main.py"
-        fake_path.parent.mkdir(parents=True, exist_ok=True)
-        fake_path.touch()
-        # no configs dir => should return []
-
-        with patch.object(main_module, "__file__", str(fake_path)):
-            result = main_module._load_configs()
-        assert result == []
-
-    def test_yaml_non_dict_skipped(self, tmp_path) -> None:
-        """YAML that parses to non-dict or missing 'name' is skipped (line 89)."""
-        import magpie.main as main_module
-
-        # Set up directory: tmp_path/src/magpie/main.py  => configs at tmp_path/configs
-        fake_main = tmp_path / "src" / "magpie" / "main.py"
-        fake_main.parent.mkdir(parents=True, exist_ok=True)
-        fake_main.touch()
-
-        configs_dir = tmp_path / "configs"
-        configs_dir.mkdir()
-        (configs_dir / "list.yaml").write_text("- item1\n- item2\n", encoding="utf-8")
-        (configs_dir / "noname.yaml").write_text("description: no name key\n", encoding="utf-8")
-        (configs_dir / "good.yaml").write_text(
-            "name: test-good\ndescription: good\n", encoding="utf-8"
-        )
-
-        with patch.object(main_module, "__file__", str(fake_main)):
-            result = main_module._load_configs()
-
-        assert len(result) == 1
-        assert result[0]["name"] == "test-good"
-
-    def test_corrupt_yaml_exception_skipped(self, tmp_path) -> None:
-        """Corrupt YAML triggers except/continue branch (lines 98-99)."""
-        import magpie.main as main_module
-
-        fake_main = tmp_path / "src" / "magpie" / "main.py"
-        fake_main.parent.mkdir(parents=True, exist_ok=True)
-        fake_main.touch()
-
-        configs_dir = tmp_path / "configs"
-        configs_dir.mkdir()
-        (configs_dir / "bad.yaml").write_text("{{{invalid", encoding="utf-8")
-        (configs_dir / "ok.yaml").write_text("name: test-ok\n", encoding="utf-8")
-
-        with patch.object(main_module, "__file__", str(fake_main)):
-            result = main_module._load_configs()
-
-        assert len(result) == 1
-        assert result[0]["name"] == "test-ok"
-
-
 class TestHealthDbDown:
-    @pytest.mark.asyncio
     async def test_health_db_down(self, client: AsyncClient) -> None:
-        """Cover lines 270-271: check_db returns False."""
         with patch(
             "magpie.storage.db.check_db",
             new_callable=AsyncMock,
@@ -89,9 +34,7 @@ class TestHealthDbDown:
             assert resp.status_code == 200
             assert resp.json()["db"] == "down"
 
-    @pytest.mark.asyncio
     async def test_health_db_exception(self, client: AsyncClient) -> None:
-        """Cover lines 270-271: check_db raises exception."""
         with patch(
             "magpie.storage.db.check_db",
             new_callable=AsyncMock,

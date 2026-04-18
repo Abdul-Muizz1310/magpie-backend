@@ -24,6 +24,9 @@ class RunRecord:
     duration_ms: int
     status: str  # "ok" | "error"
     error: str | None
+    items_new: int = 0
+    items_updated: int = 0
+    items_removed: int = 0
 
 
 class RunRepository:
