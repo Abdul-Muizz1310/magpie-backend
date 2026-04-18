@@ -70,9 +70,7 @@ class TestPlaywrightLocalIntegration:
         assert all("name" in item for item in items)
 
     @pytest.mark.asyncio
-    async def test_handles_missing_wait_for_timeout(
-        self, fixture_server: str, caplog
-    ) -> None:
+    async def test_handles_missing_wait_for_timeout(self, fixture_server: str, caplog) -> None:
         """wait_for_selector timeouts are now logged and the run continues.
 
         The previous behaviour (propagate the exception) meant the healer
