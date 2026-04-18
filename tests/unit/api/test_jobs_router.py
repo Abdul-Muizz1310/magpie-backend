@@ -218,3 +218,90 @@ class TestListRunItemsEndpoint:
     async def test_invalid_limit_422(self, client: AsyncClient, seeded_source) -> None:
         resp = await client.get(f"/api/runs/{uuid.uuid4()}/items?limit=0")
         assert resp.status_code == 422
+
+    async def test_resolves_relative_urls_against_source_base(
+        self, client: AsyncClient, session_factory, seeded_source
+    ) -> None:
+        async with session_factory() as session:
+            src = await SourcesRepository(session).get_by_name("src")
+            assert src is not None
+            run = await PgRunRepository(session).create_queued(
+                source_id=src.id, source_name=src.name
+            )
+            await PgItemRepository(session).persist_items(
+                src.id,
+                [{"id": "1", "title": "t", "url": "/abs/2604.14683"}],
+                dedupe_key="id",
+            )
+            await session.commit()
+            run_id = run.id
+
+        resp = await client.get(f"/api/runs/{run_id}/items")
+        assert resp.status_code == 200
+        body = resp.json()
+        # seeded_source sets url=https://example.com; relative /abs/... joins to that
+        assert body[0]["url"] == "https://example.com/abs/2604.14683"
+
+    async def test_preserves_absolute_urls(
+        self, client: AsyncClient, session_factory, seeded_source
+    ) -> None:
+        async with session_factory() as session:
+            src = await SourcesRepository(session).get_by_name("src")
+            assert src is not None
+            run = await PgRunRepository(session).create_queued(
+                source_id=src.id, source_name=src.name
+            )
+            await PgItemRepository(session).persist_items(
+                src.id,
+                [{"id": "1", "title": "t", "url": "https://other.example/post/1"}],
+                dedupe_key="id",
+            )
+            await session.commit()
+            run_id = run.id
+
+        resp = await client.get(f"/api/runs/{run_id}/items")
+        assert resp.status_code == 200
+        assert resp.json()[0]["url"] == "https://other.example/post/1"
+
+    async def test_falls_back_to_link_key_for_url(
+        self, client: AsyncClient, session_factory, seeded_source
+    ) -> None:
+        async with session_factory() as session:
+            src = await SourcesRepository(session).get_by_name("src")
+            assert src is not None
+            run = await PgRunRepository(session).create_queued(
+                source_id=src.id, source_name=src.name
+            )
+            # arxiv-cs-style: config uses `link` instead of `url`
+            await PgItemRepository(session).persist_items(
+                src.id,
+                [{"id": "1", "title": "t", "link": "/abs/2604.14683"}],
+                dedupe_key="id",
+            )
+            await session.commit()
+            run_id = run.id
+
+        resp = await client.get(f"/api/runs/{run_id}/items")
+        assert resp.status_code == 200
+        assert resp.json()[0]["url"] == "https://example.com/abs/2604.14683"
+
+    async def test_empty_url_when_no_url_keys_present(
+        self, client: AsyncClient, session_factory, seeded_source
+    ) -> None:
+        async with session_factory() as session:
+            src = await SourcesRepository(session).get_by_name("src")
+            assert src is not None
+            run = await PgRunRepository(session).create_queued(
+                source_id=src.id, source_name=src.name
+            )
+            await PgItemRepository(session).persist_items(
+                src.id,
+                [{"id": "1", "title": "t"}],
+                dedupe_key="id",
+            )
+            await session.commit()
+            run_id = run.id
+
+        resp = await client.get(f"/api/runs/{run_id}/items")
+        assert resp.status_code == 200
+        assert resp.json()[0]["url"] == ""
