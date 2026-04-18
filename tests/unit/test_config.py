@@ -65,9 +65,18 @@ class TestConfigHappyPath:
 
     def test_registry_loads_all_shipped_configs(self) -> None:
         configs = load_all_configs(FIXTURES)
-        assert len(configs) == 4
         names = {c.name for c in configs}
-        assert names == {"hackernews", "arxiv-cs", "weather-live", "demo-broken"}
+        assert names == {
+            "hackernews",
+            "arxiv-cs",
+            "weather-live",
+            "demo-broken",
+            "lobsters",
+            "huggingface-papers",
+            "github-trending",
+            "producthunt-today",
+            "wikipedia-current-events",
+        }
 
     def test_no_pagination_is_valid(self) -> None:
         cfg = SourceConfig(**_minimal_config())

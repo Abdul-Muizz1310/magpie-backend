@@ -1,0 +1,22 @@
+name: wikipedia-current-events
+description: Wikipedia Current Events Portal — XPath demo (news bullets)
+url: https://en.wikipedia.org/wiki/Portal:Current_events
+render: false
+schedule: "0 0 * * 0"
+rate_limit: { rps: 1 }
+
+item:
+  container: "//div[contains(@class,'current-events-content')]//li"
+  container_type: xpath
+  fields:
+    - { name: id, selector: "normalize-space(string(.//a[1]/@href))", selector_type: xpath }
+    - { name: title, selector: "normalize-space(string(.))", selector_type: xpath }
+    - { name: url, selector: ".//a[1]/@href", selector_type: xpath }
+  dedupe_key: id
+
+pagination:
+  max_pages: 1
+
+health:
+  min_items: 3
+  max_staleness: 14d

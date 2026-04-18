@@ -1,0 +1,22 @@
+name: github-trending
+description: GitHub trending repositories (daily)
+url: https://github.com/trending
+render: false
+schedule: "0 0 * * 0"
+rate_limit: { rps: 1 }
+
+item:
+  container: "article.Box-row"
+  fields:
+    - { name: id, selector: "h2.h3 a::attr(href)" }
+    - { name: title, selector: "h2.h3 a::text" }
+    - { name: url, selector: "h2.h3 a::attr(href)" }
+    - { name: description, selector: "p.col-9::text" }
+  dedupe_key: id
+
+pagination:
+  max_pages: 1
+
+health:
+  min_items: 10
+  max_staleness: 7d

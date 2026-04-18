@@ -1,0 +1,27 @@
+name: producthunt-today
+description: Product Hunt — today's top launches (JS-rendered)
+url: https://www.producthunt.com/
+render: true
+schedule: "0 0 * * 0"
+rate_limit: { rps: 1 }
+
+wait_for: 'section[data-test="homepage-section-0"]'
+
+actions:
+  - { type: wait, ms: 2000 }
+
+item:
+  container: 'div[data-test^="post-item"]'
+  fields:
+    - { name: id, selector: "::attr(data-test)" }
+    - { name: title, selector: "a[data-test^='post-name']::text" }
+    - { name: url, selector: "a[data-test^='post-name']::attr(href)" }
+    - { name: tagline, selector: "a[data-test^='post-name'] + span::text" }
+  dedupe_key: id
+
+pagination:
+  max_pages: 1
+
+health:
+  min_items: 5
+  max_staleness: 7d

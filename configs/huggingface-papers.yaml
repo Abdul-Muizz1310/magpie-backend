@@ -1,0 +1,21 @@
+name: huggingface-papers
+description: Hugging Face daily papers — latest AI research picks
+url: https://huggingface.co/papers
+render: false
+schedule: "0 0 * * 0"
+rate_limit: { rps: 1 }
+
+item:
+  container: "article"
+  fields:
+    - { name: id, selector: "a[href^='/papers/']::attr(href)" }
+    - { name: title, selector: "h3 a::text" }
+    - { name: url, selector: "a[href^='/papers/']::attr(href)" }
+  dedupe_key: id
+
+pagination:
+  max_pages: 1
+
+health:
+  min_items: 5
+  max_staleness: 7d

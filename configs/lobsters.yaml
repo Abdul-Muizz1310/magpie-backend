@@ -1,0 +1,22 @@
+name: lobsters
+description: Lobste.rs front page — tech link aggregator (HN alternative)
+url: https://lobste.rs/
+render: false
+schedule: "0 0 * * 0"
+rate_limit: { rps: 1 }
+
+item:
+  container: "li.story"
+  fields:
+    - { name: id, selector: "::attr(data-shortid)" }
+    - { name: title, selector: "a.u-url::text" }
+    - { name: url, selector: "a.u-url::attr(href)" }
+    - { name: author, selector: "a.u-author::text" }
+  dedupe_key: id
+
+pagination:
+  max_pages: 1
+
+health:
+  min_items: 15
+  max_staleness: 7d
