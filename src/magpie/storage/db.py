@@ -24,11 +24,24 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 def _normalize_url(url: str) -> str:
-    """Rewrite Postgres URLs so SQLAlchemy uses the async asyncpg driver."""
+    """Rewrite Postgres URLs so SQLAlchemy uses the async asyncpg driver.
+
+    Two tweaks happen here:
+
+    * ``postgres://`` / ``postgresql://`` → ``postgresql+asyncpg://`` so the
+      async dialect is selected.
+    * ``sslmode=…`` → ``ssl=…``. libpq uses ``sslmode``; asyncpg uses ``ssl``.
+      Neon hands out URLs with ``sslmode=require``, which SQLAlchemy forwards
+      to ``asyncpg.connect()`` as a kwarg — the driver then throws
+      ``TypeError: connect() got an unexpected keyword argument 'sslmode'``.
+      Renaming the query param side-steps the whole class of failure.
+    """
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://") :]
     if url.startswith("postgresql://"):
         url = "postgresql+asyncpg://" + url[len("postgresql://") :]
+    if "+asyncpg" in url and "sslmode=" in url:
+        url = url.replace("sslmode=", "ssl=")
     return url
 
 

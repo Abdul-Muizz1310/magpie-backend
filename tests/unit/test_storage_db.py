@@ -70,6 +70,20 @@ class TestGetEngine:
             url_arg = mock_create.call_args.args[0]
             assert url_arg == "postgresql+asyncpg://u:p@h/db"
 
+    def test_sslmode_rewritten_to_ssl_for_asyncpg(self) -> None:
+        mock_engine = MagicMock()
+        with (
+            patch.dict(
+                "os.environ",
+                {"DATABASE_URL": "postgresql://u:p@h/db?sslmode=require"},
+            ),
+            patch("magpie.storage.db.create_async_engine", return_value=mock_engine) as mock_create,
+        ):
+            db_module.get_engine()
+            url_arg = mock_create.call_args.args[0]
+            assert url_arg == "postgresql+asyncpg://u:p@h/db?ssl=require"
+            assert "sslmode" not in url_arg
+
 
 class TestGetSessionFactory:
     def test_returns_callable(self) -> None:
