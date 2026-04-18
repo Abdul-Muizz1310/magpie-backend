@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 import pytest
 
 from magpie.config.loader import load_config_from_file
-from magpie.config.schema import PaginationDef
+from magpie.config.schema import PaginationDef, SourceConfig
 from magpie.scrapy.factory import run_spider
 
 FIXTURES = Path(__file__).resolve().parent.parent.parent / "fixtures"
@@ -89,13 +89,20 @@ class TestScrapyLocalIntegration:
         assert len(items) == 7
 
     def test_zero_items_from_broken_selector(self, fixture_server: str) -> None:
-        """Broken selector returns empty list (not crash)."""
-        config = load_config_from_file(CONFIGS / "demo-broken.yaml")
-        config = config.model_copy(update={"url": f"{fixture_server}/hackernews-v1.html"})
+        """Broken title selector yields None for title; the spider itself doesn't crash."""
+        config = SourceConfig(
+            name="inline-broken",
+            url=f"{fixture_server}/hackernews-v1.html",  # type: ignore[arg-type]
+            schedule="0 0 * * 0",
+            item={  # type: ignore[arg-type]
+                "container": "tr.athing",
+                "fields": [
+                    {"name": "title", "selector": "span.nonexistent-class > a::text"},
+                    {"name": "id", "selector": "::attr(id)"},
+                ],
+                "dedupe_key": "id",
+            },
+        )
         items = run_spider(config)
-        # demo-broken uses "span.nonexistent-class" which matches nothing
-        # but the id field (::attr(id)) still matches, so items have id only
-        # Since title and url are None but id is present, items are included
-        # The test should check that title extraction fails
         for item in items:
             assert item.get("title") is None

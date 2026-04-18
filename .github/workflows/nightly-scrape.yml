@@ -17,7 +17,6 @@ jobs:
         source:
           - hackernews
           - arxiv-cs
-          - weather-live
           - lobsters
           - huggingface-papers
           - github-trending
@@ -30,7 +29,7 @@ jobs:
       - run: pip install uv
       - run: uv sync --frozen
       - name: Install Playwright chromium
-        if: matrix.source == 'weather-live' || matrix.source == 'producthunt-today'
+        if: matrix.source == 'producthunt-today'
         run: uv run playwright install chromium --with-deps
       - name: Apply migrations (idempotent)
         run: uv run python -m magpie.cli migrate

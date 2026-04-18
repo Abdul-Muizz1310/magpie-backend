@@ -69,8 +69,6 @@ class TestConfigHappyPath:
         assert names == {
             "hackernews",
             "arxiv-cs",
-            "weather-live",
-            "demo-broken",
             "lobsters",
             "huggingface-papers",
             "github-trending",
