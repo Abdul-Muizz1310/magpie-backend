@@ -117,9 +117,7 @@ class TestListInWindow:
             dedupe_key="id",
         )
         ended = datetime.now(UTC) + timedelta(seconds=1)
-        items = await repo.list_in_window(
-            source_id=src.id, started_at=started, ended_at=ended
-        )
+        items = await repo.list_in_window(source_id=src.id, started_at=started, ended_at=ended)
         assert {i.dedupe_key for i in items} == {"1", "2"}
 
     async def test_excludes_items_outside_window(self, db_session) -> None:
@@ -145,9 +143,7 @@ class TestListInWindow:
         # Drop item 2 — marks it removed.
         await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
         ended = datetime.now(UTC) + timedelta(seconds=1)
-        items = await repo.list_in_window(
-            source_id=src.id, started_at=started, ended_at=ended
-        )
+        items = await repo.list_in_window(source_id=src.id, started_at=started, ended_at=ended)
         assert {i.dedupe_key for i in items} == {"1"}
 
     async def test_respects_limit_and_offset(self, db_session) -> None:
@@ -175,7 +171,5 @@ class TestListInWindow:
         repo = PgItemRepository(db_session)
         started = datetime.now(UTC)
         await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
-        items = await repo.list_in_window(
-            source_id=src.id, started_at=started, ended_at=None
-        )
+        items = await repo.list_in_window(source_id=src.id, started_at=started, ended_at=None)
         assert len(items) == 1
