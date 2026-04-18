@@ -10,6 +10,7 @@ import pytest
 
 from magpie.config.schema import SourceConfig
 from magpie.playwright.runner import PlaywrightRunner
+from magpie.scrapy.factory import _extract_items_from_html
 
 
 def _js_config(**overrides: object) -> SourceConfig:
@@ -66,9 +67,15 @@ SAMPLE_HTML = """
 """
 
 
-def _make_playwright_mock(mock_page, mock_browser):
-    """Build a mock async_playwright context manager."""
-    mock_browser.new_page = AsyncMock(return_value=mock_page)
+def _make_playwright_mock(mock_page, mock_browser, mock_context):
+    """Build a mock async_playwright context manager.
+
+    Mirrors the real flow: ``p.chromium.launch`` → ``browser.new_context`` →
+    ``context.new_page``. Tests can reach any layer via their own mocks.
+    """
+    mock_context.new_page = AsyncMock(return_value=mock_page)
+    mock_context.close = AsyncMock()
+    mock_browser.new_context = AsyncMock(return_value=mock_context)
     mock_browser.close = AsyncMock()
 
     mock_chromium = MagicMock()
@@ -81,8 +88,7 @@ def _make_playwright_mock(mock_page, mock_browser):
     mock_pw_ctx.__aenter__ = AsyncMock(return_value=mock_pw)
     mock_pw_ctx.__aexit__ = AsyncMock(return_value=False)
 
-    mock_async_playwright = MagicMock(return_value=mock_pw_ctx)
-    return mock_async_playwright
+    return MagicMock(return_value=mock_pw_ctx)
 
 
 @pytest.fixture(autouse=True)
@@ -111,7 +117,7 @@ class TestPlaywrightRunnerRun:
     async def test_run_navigates_waits_and_extracts(
         self, _mock_playwright_module: ModuleType
     ) -> None:
-        """Full flow: launch browser, goto, wait_for, actions, extract."""
+        """Full flow: launch browser, new context with UA, goto, wait_for, actions, extract."""
         cfg = _js_config()
         runner = PlaywrightRunner(cfg)
 
@@ -125,7 +131,8 @@ class TestPlaywrightRunnerRun:
         mock_page.fill = AsyncMock()
 
         mock_browser = AsyncMock()
-        mock_fn = _make_playwright_mock(mock_page, mock_browser)
+        mock_context = AsyncMock()
+        mock_fn = _make_playwright_mock(mock_page, mock_browser, mock_context)
         _mock_playwright_module.async_playwright = mock_fn  # type: ignore[attr-defined]
 
         items = await runner.run()
@@ -141,6 +148,11 @@ class TestPlaywrightRunnerRun:
         mock_page.evaluate.assert_called_once_with("window.scrollTo(0, document.body.scrollHeight)")
         mock_page.fill.assert_called_once_with("input.search", "hello")
         mock_browser.close.assert_called_once()
+        mock_context.close.assert_called_once()
+
+        # User-Agent was set on the context.
+        new_context_kwargs = mock_browser.new_context.await_args.kwargs
+        assert "magpie" in new_context_kwargs["user_agent"]
 
     @pytest.mark.asyncio
     async def test_run_without_wait_for(self, _mock_playwright_module: ModuleType) -> None:
@@ -154,7 +166,8 @@ class TestPlaywrightRunnerRun:
         mock_page.wait_for_selector = AsyncMock()
 
         mock_browser = AsyncMock()
-        mock_fn = _make_playwright_mock(mock_page, mock_browser)
+        mock_context = AsyncMock()
+        mock_fn = _make_playwright_mock(mock_page, mock_browser, mock_context)
         _mock_playwright_module.async_playwright = mock_fn  # type: ignore[attr-defined]
 
         items = await runner.run()
@@ -172,32 +185,37 @@ class TestPlaywrightRunnerRun:
         mock_page.goto = AsyncMock(side_effect=RuntimeError("network error"))
 
         mock_browser = AsyncMock()
-        mock_fn = _make_playwright_mock(mock_page, mock_browser)
+        mock_context = AsyncMock()
+        mock_fn = _make_playwright_mock(mock_page, mock_browser, mock_context)
         _mock_playwright_module.async_playwright = mock_fn  # type: ignore[attr-defined]
 
         with pytest.raises(RuntimeError, match="network error"):
             await runner.run()
 
         mock_browser.close.assert_called_once()
+        mock_context.close.assert_called_once()
 
 
-class TestPlaywrightRunnerExtractItems:
+class TestPlaywrightExtractionParity:
+    """The Playwright runner delegates to _extract_items_from_html, so the
+    tests that used to hit its private ``_extract_items`` method now drive the
+    shared extractor directly. Same behaviour, same coverage, one code path.
+    """
+
     def test_extract_text_selectors(self) -> None:
         cfg = _js_config()
-        runner = PlaywrightRunner(cfg)
         html = """
         <html><body>
         <div class="item" data-id="10"><h2>Title A</h2></div>
         <div class="item" data-id="20"><h2>Title B</h2></div>
         </body></html>
         """
-        items = runner._extract_items(html)
+        items = _extract_items_from_html(html, cfg)
         assert len(items) == 2
         assert items[0]["title"] == "Title A"
         assert items[1]["id"] == "20"
 
     def test_extract_attr_field(self) -> None:
-        """attr extraction reads from the container element's attrib."""
         cfg = SourceConfig(
             name="test-attr",
             url="https://example.com",
@@ -212,19 +230,17 @@ class TestPlaywrightRunnerExtractItems:
                 "dedupe_key": "id",
             },
         )
-        runner = PlaywrightRunner(cfg)
         html = """
         <html><body>
         <div class="card" data-id="1" data-href="/page1"><a>Link</a></div>
         <div class="card" data-id="2" data-href="/page2"><a>Link</a></div>
         </body></html>
         """
-        items = runner._extract_items(html)
+        items = _extract_items_from_html(html, cfg)
         assert len(items) == 2
         assert items[0]["link"] == "/page1"
 
     def test_extract_plain_selector_no_pseudo(self) -> None:
-        """Selector without ::text or ::attr falls back to getall."""
         cfg = SourceConfig(
             name="test-plain",
             url="https://example.com",
@@ -239,29 +255,26 @@ class TestPlaywrightRunnerExtractItems:
                 "dedupe_key": "id",
             },
         )
-        runner = PlaywrightRunner(cfg)
         html = """
         <html><body>
         <div class="wrap" data-id="1"><span class="tag">Hello</span></div>
         </body></html>
         """
-        items = runner._extract_items(html)
+        items = _extract_items_from_html(html, cfg)
         assert len(items) == 1
         assert items[0]["inner"] is not None
 
     def test_extract_skips_all_none_items(self) -> None:
         cfg = _js_config()
-        runner = PlaywrightRunner(cfg)
         html = """
         <html><body>
         <div class="item"><p>No h2 or data-id</p></div>
         </body></html>
         """
-        items = runner._extract_items(html)
+        items = _extract_items_from_html(html, cfg)
         assert items == []
 
     def test_extract_attr_missing_returns_none(self) -> None:
-        """When an attr is specified but not present on the element."""
         cfg = SourceConfig(
             name="test-missing-attr",
             url="https://example.com",
@@ -276,13 +289,12 @@ class TestPlaywrightRunnerExtractItems:
                 "dedupe_key": "name",
             },
         )
-        runner = PlaywrightRunner(cfg)
         html = """
         <html><body>
         <div class="card"><a href="/page">Click</a></div>
         </body></html>
         """
-        items = runner._extract_items(html)
+        items = _extract_items_from_html(html, cfg)
         assert len(items) == 1
         assert items[0]["link"] is None
         assert items[0]["name"] == "Click"

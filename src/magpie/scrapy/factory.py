@@ -11,6 +11,11 @@ from scrapy.http import Response
 
 from magpie.config.schema import SourceConfig
 
+USER_AGENT = "magpie/0.1 (+https://github.com/Abdul-Muizz1310/magpie-backend)"
+"""Identifies us politely on every outbound fetch — Wikipedia and many other
+sites refuse requests without a real UA, and ``httpx``'s default gives them
+nothing to whitelist against."""
+
 
 def _extract_items_from_html(html: str, config: SourceConfig) -> list[dict[str, Any]]:
     """Extract items from HTML using the config's selectors via parsel.
@@ -101,7 +106,11 @@ def run_spider(config: SourceConfig) -> list[dict[str, Any]]:
     url = str(config.url)
     pages_scraped = 0
 
-    with httpx.Client(timeout=30.0) as client:
+    with httpx.Client(
+        timeout=30.0,
+        follow_redirects=True,
+        headers={"User-Agent": USER_AGENT},
+    ) as client:
         while url and pages_scraped < config.pagination.max_pages:
             resp = client.get(url)
             resp.raise_for_status()

@@ -214,3 +214,75 @@ class TestHealApplyMissingSource:
         )
         assert result["healed"] == []
         assert result["error"] == "source not found"
+
+
+class TestHealApplyContainer:
+    """When the container selector returns 0 items, heal the container first."""
+
+    BROKEN_CONTAINER_YAML = """\
+name: broken-container
+url: https://example.com
+schedule: "0 */6 * * *"
+item:
+  container: "div.old-container-class"
+  fields:
+    - { name: title, selector: "h2::text" }
+    - { name: id, selector: "::attr(data-id)" }
+  dedupe_key: id
+"""
+
+    HTML = """
+    <html><body>
+      <article class="new-card" data-id="1"><h2>Alpha</h2></article>
+      <article class="new-card" data-id="2"><h2>Beta</h2></article>
+    </body></html>
+    """
+
+    async def test_container_heal_triggers_when_zero_items(self, session_factory) -> None:
+        cfg = SourceConfig(**yaml.safe_load(self.BROKEN_CONTAINER_YAML))
+        async with session_factory() as session:
+            await SourcesRepository(session).create(
+                config=cfg,
+                origin=SourceOrigin.api,
+                yaml_text=self.BROKEN_CONTAINER_YAML,
+            )
+            await session.commit()
+
+        with (
+            patch(
+                "magpie.healer.apply._fetch_html",
+                new=AsyncMock(return_value=self.HTML),
+            ),
+            patch(
+                "magpie.healer.apply.fix_selector",
+                new=AsyncMock(
+                    return_value={
+                        "selector": "article.new-card",
+                        "confidence": 0.95,
+                        "reasoning": "markup now uses <article>",
+                        "sample_values": ["Alpha", "Beta"],
+                    }
+                ),
+            ) as mock_fix,
+        ):
+            result = await heal_source(
+                source="broken-container",
+                run_id=None,
+                session_factory=session_factory,
+            )
+
+        # fix_selector was called with target='container' first
+        first_call_kwargs = mock_fix.await_args_list[0].kwargs
+        assert first_call_kwargs["field_name"] == "container"
+        assert first_call_kwargs["old_selector"] == "div.old-container-class"
+
+        # Container was patched in the stored YAML.
+        async with session_factory() as session:
+            row = await SourcesRepository(session).get_by_name("broken-container")
+            assert row is not None
+            assert "article.new-card" in row.config_yaml
+            assert "div.old-container-class" not in row.config_yaml
+
+        # Summary records the container heal.
+        targets = [h["target"] for h in result["healed"]]
+        assert "container" in targets
