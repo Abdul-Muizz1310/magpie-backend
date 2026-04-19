@@ -34,13 +34,25 @@ log = logging.getLogger("magpie.healer")
 CONTAINER_TARGET = "container"
 
 
-async def _fetch_html(url: str) -> str:
+async def _fetch_html(config: SourceConfig) -> str:
+    """Fetch the source's current HTML for the healer to analyze.
+
+    For ``render: true`` sources we route through Playwright — the same path
+    the scraper uses — so anti-bot protections (Product Hunt's 403 on plain
+    httpx, Cloudflare challenges, etc.) don't blind the healer. Static
+    sources stay on ``httpx`` to keep the happy path fast.
+    """
+    if config.render:
+        from magpie.playwright.runner import PlaywrightRunner
+
+        return await PlaywrightRunner(config).fetch_html()
+
     async with httpx.AsyncClient(
         timeout=30.0,
         follow_redirects=True,
         headers={"User-Agent": USER_AGENT},
     ) as client:
-        resp = await client.get(url)
+        resp = await client.get(str(config.url))
         resp.raise_for_status()
         return resp.text
 
@@ -98,7 +110,7 @@ async def heal_source(
         source_id = row.id
 
     try:
-        html = await _fetch_html(str(config.url))
+        html = await _fetch_html(config)
     except Exception as exc:
         log.exception("Heal fetch failed for %s", source)
         return {"source": source, "healed": [], "error": f"fetch failed: {exc}"}

@@ -55,14 +55,20 @@ class ScrapeBatchRequest(BaseModel):
 
 
 class ScrapeItem(BaseModel):
-    """A single scraped item in the response payload."""
+    """A single scraped item in the response payload.
+
+    ``url`` is intentionally unconstrained — some sources yield valid items
+    without a link (e.g. Wikipedia bullets that are plain-text announcements
+    with no anchor). Rejecting those would crash the whole batch on data the
+    user would reasonably want captured.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     stable_id: str = Field(min_length=1)
-    url: str = Field(min_length=1)
-    title: str
-    content_text: str
+    url: str = ""
+    title: str = ""
+    content_text: str = ""
     content_hash: str = Field(min_length=1)
     fetched_at: datetime
     html_snapshot_url: str | None = None

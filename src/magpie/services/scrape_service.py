@@ -92,19 +92,25 @@ def _normalize_and_hash(text: str) -> tuple[str, str]:
 
 
 def _deduplicate_items(items: list[dict[str, Any]], dedupe_key: str) -> list[dict[str, Any]]:
-    """First-wins dedup on ``dedupe_key``; drop items missing the key.
+    """First-wins dedup on ``dedupe_key``; drop items missing or blank-keyed.
 
     Wikipedia's Current Events portal (and plenty of other sources) repeats
     the same link across multiple bullets — if we passed both rows through to
     ``persist_items`` the unique-constraint check would reject the whole batch
     and the run would error out instead of returning what it could.
+
+    Rows whose ``dedupe_key`` is missing or blank are dropped too: if we kept
+    them, every "no-anchor" bullet would collapse into a single empty-key row
+    and we'd lose data that might have been meaningful via other fields.
     """
     seen: dict[str, dict[str, Any]] = {}
     for item in items:
         key = item.get(dedupe_key)
         if key is None:
             continue
-        k = str(key)
+        k = str(key).strip()
+        if not k:
+            continue
         if k not in seen:
             seen[k] = item
     return list(seen.values())

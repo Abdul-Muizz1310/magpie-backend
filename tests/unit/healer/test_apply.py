@@ -286,3 +286,92 @@ item:
         # Summary records the container heal.
         targets = [h["target"] for h in result["healed"]]
         assert "container" in targets
+
+
+class TestHealFetchDispatch:
+    """Which transport the healer picks based on ``config.render``."""
+
+    JS_YAML = """\
+name: js-src
+url: https://example.com/js
+render: true
+schedule: "0 */6 * * *"
+wait_for: "div.card"
+item:
+  container: "div.card"
+  fields:
+    - { name: title, selector: "h2::text" }
+    - { name: id, selector: "::attr(data-id)" }
+  dedupe_key: id
+"""
+
+    STATIC_YAML = """\
+name: static-src
+url: https://example.com/static
+render: false
+schedule: "0 */6 * * *"
+item:
+  container: "div.card"
+  fields:
+    - { name: title, selector: "h2::text" }
+    - { name: id, selector: "::attr(data-id)" }
+  dedupe_key: id
+"""
+
+    STUB_HTML = "<html><body><div class='card' data-id='1'><h2>Hi</h2></div></body></html>"
+
+    async def test_render_true_fetches_via_playwright(self, session_factory) -> None:
+        cfg = SourceConfig(**yaml.safe_load(self.JS_YAML))
+        async with session_factory() as session:
+            await SourcesRepository(session).create(
+                config=cfg, origin=SourceOrigin.api, yaml_text=self.JS_YAML
+            )
+            await session.commit()
+
+        fake_runner = AsyncMock()
+        fake_runner.fetch_html = AsyncMock(return_value=self.STUB_HTML)
+        from magpie.healer import apply as apply_mod
+
+        with (
+            patch(
+                "magpie.playwright.runner.PlaywrightRunner",
+                return_value=fake_runner,
+            ) as runner_cls,
+            patch.object(
+                apply_mod,
+                "httpx",
+                create=True,
+                new=AsyncMock(),
+            ) as httpx_mod,
+        ):
+            await apply_mod._fetch_html(cfg)
+
+        runner_cls.assert_called_once_with(cfg)
+        fake_runner.fetch_html.assert_awaited_once()
+        # httpx must not be touched for render=true sources.
+        httpx_mod.AsyncClient.assert_not_called()
+
+    async def test_render_false_uses_httpx(self, session_factory) -> None:
+        cfg = SourceConfig(**yaml.safe_load(self.STATIC_YAML))
+
+        from magpie.healer import apply as apply_mod
+
+        fake_response = AsyncMock()
+        fake_response.raise_for_status = AsyncMock()
+        fake_response.text = self.STUB_HTML
+
+        fake_client = AsyncMock()
+        fake_client.get = AsyncMock(return_value=fake_response)
+        fake_client.__aenter__.return_value = fake_client
+        fake_client.__aexit__.return_value = None
+
+        with (
+            patch("magpie.healer.apply.httpx.AsyncClient", return_value=fake_client) as client_cls,
+            patch("magpie.playwright.runner.PlaywrightRunner") as playwright_cls,
+        ):
+            html = await apply_mod._fetch_html(cfg)
+
+        assert html == self.STUB_HTML
+        client_cls.assert_called_once()
+        # Playwright must not spin up a browser for static sources.
+        playwright_cls.assert_not_called()

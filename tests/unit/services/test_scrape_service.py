@@ -228,6 +228,76 @@ class TestDeduplicateItems:
         deduped = _deduplicate_items(items, "id")
         assert len(deduped) == 1
 
+    def test_items_with_blank_dedupe_key_are_dropped(self) -> None:
+        """Blank/whitespace-only keys would otherwise collapse real rows into
+        a single empty-key row. Drop them so the rest persist cleanly.
+        """
+        from magpie.services.scrape_service import _deduplicate_items
+
+        items = [
+            {"id": "", "title": "blank anchor"},
+            {"id": "   ", "title": "whitespace only"},
+            {"id": "a", "title": "real"},
+        ]
+        deduped = _deduplicate_items(items, "id")
+        assert deduped == [{"id": "a", "title": "real"}]
+
+
+class TestScrapeItemSchema:
+    """Regression guards for ScrapeItem's field constraints.
+
+    The wikipedia-current-events source yields valid bullets that have no
+    anchor (hence no url); those used to crash the whole batch when
+    ``url: str = Field(min_length=1)``.
+    """
+
+    def test_accepts_item_with_empty_url_and_title(self) -> None:
+        from datetime import UTC, datetime
+
+        from magpie.schemas.scrape import ScrapeItem
+
+        # No ValidationError expected.
+        item = ScrapeItem(
+            stable_id="abc",
+            url="",
+            title="",
+            content_text="plain bullet",
+            content_hash="0" * 64,
+            fetched_at=datetime.now(UTC),
+        )
+        assert item.url == ""
+        assert item.title == ""
+
+    def test_still_rejects_empty_stable_id_and_hash(self) -> None:
+        """``stable_id`` and ``content_hash`` stay non-empty — those are the
+        only things we need to persist + dedupe rows, so an empty value is a
+        real bug.
+        """
+        from datetime import UTC, datetime
+
+        from pydantic import ValidationError
+
+        from magpie.schemas.scrape import ScrapeItem
+
+        with pytest.raises(ValidationError):
+            ScrapeItem(
+                stable_id="",
+                url="https://x",
+                title="t",
+                content_text="c",
+                content_hash="0" * 64,
+                fetched_at=datetime.now(UTC),
+            )
+        with pytest.raises(ValidationError):
+            ScrapeItem(
+                stable_id="abc",
+                url="https://x",
+                title="t",
+                content_text="c",
+                content_hash="",
+                fetched_at=datetime.now(UTC),
+            )
+
 
 class TestEmptyItems:
     async def test_empty_items_returns_gracefully(self, session_factory) -> None:

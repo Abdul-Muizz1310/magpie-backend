@@ -25,8 +25,13 @@ class PlaywrightRunner:
     def __init__(self, config: SourceConfig) -> None:
         self._config = config
 
-    async def run(self) -> list[dict[str, Any]]:
-        """Navigate to the page, execute actions, and extract items."""
+    async def fetch_html(self) -> str:
+        """Navigate + execute actions, return the rendered DOM as a string.
+
+        Shared by :meth:`run` (which extracts items from the returned HTML)
+        and the healer's fetch path, which needs the raw DOM to ask the LLM
+        for a replacement selector.
+        """
         from playwright.async_api import async_playwright
 
         headless = os.environ.get("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
@@ -62,8 +67,12 @@ class PlaywrightRunner:
                     elif action.type == "type" and action.selector and action.text:
                         await page.fill(action.selector, action.text)
 
-                html = await page.content()
-                return _extract_items_from_html(html, self._config)
+                return await page.content()
             finally:
                 await context.close()
                 await browser.close()
+
+    async def run(self) -> list[dict[str, Any]]:
+        """Navigate to the page, execute actions, and extract items."""
+        html = await self.fetch_html()
+        return _extract_items_from_html(html, self._config)

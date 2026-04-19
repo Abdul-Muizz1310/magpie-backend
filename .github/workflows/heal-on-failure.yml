@@ -3,9 +3,21 @@ on:
   workflow_run:
     workflows: [nightly-scrape]
     types: [completed]
+  # Manual trigger lets you run the healer on demand — useful when nightly-
+  # scrape succeeds at the workflow level but you still suspect broken
+  # selectors (e.g. min-item underflow that didn't raise).
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Source name to heal (blank = all most-recent failed runs)"
+        required: false
 jobs:
   heal:
-    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    # Always run on manual dispatch; on workflow_run only when nightly-scrape
+    # actually failed.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch'
+          || github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -16,6 +28,8 @@ jobs:
         with: { python-version: "3.12" }
       - run: pip install uv
       - run: uv sync --frozen
+      - name: Install Playwright chromium
+        run: uv run playwright install chromium --with-deps
       - run: uv run python -m magpie.healer.run
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -26,3 +40,4 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GITHUB_REPO: Abdul-Muizz1310/magpie-backend
           GITHUB_HEAL_LABEL: "scrape:self-heal"
+          HEAL_SOURCE_FILTER: ${{ inputs.source }}
