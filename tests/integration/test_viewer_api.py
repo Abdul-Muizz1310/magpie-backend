@@ -14,6 +14,7 @@ from magpie.api.deps import get_db_session, get_session_factory_dep
 from magpie.config.schema import SourceConfig
 from magpie.main import app
 from magpie.storage.heals_repo import HealsRepository
+from magpie.storage.items_repo_pg import PgItemRepository
 from magpie.storage.models import HealMode, SourceOrigin
 from magpie.storage.runs_repo_pg import PgRunRepository
 from magpie.storage.sources_repo import SourcesRepository
@@ -155,3 +156,85 @@ class TestViewerAPIFailures:
     async def test_nonexistent_source_404(self, client: AsyncClient) -> None:
         resp = await client.get("/sources/nonexistent")
         assert resp.status_code == 404
+
+
+class TestListSourceItemsEndpoint:
+    async def test_returns_items_with_data_blob(
+        self, client: AsyncClient, session_factory, seeded
+    ) -> None:
+        async with session_factory() as session:
+            src = await SourcesRepository(session).get_by_name("hackernews")
+            assert src is not None
+            await PgItemRepository(session).persist_items(
+                src.id,
+                [
+                    {"id": "1", "title": "first", "url": "/item?id=1"},
+                    {"id": "2", "title": "second", "url": "https://other.example/2"},
+                ],
+                dedupe_key="id",
+            )
+            await session.commit()
+
+        resp = await client.get("/sources/hackernews/items")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body) == 2
+        first = next(b for b in body if b["title"] == "first")
+        # Relative URL resolved against source's base
+        assert first["url"] == "https://news.ycombinator.com/item?id=1"
+        # Full scraped dict passes through in `data`
+        assert first["data"] == {"id": "1", "title": "first", "url": "/item?id=1"}
+        second = next(b for b in body if b["title"] == "second")
+        assert second["url"] == "https://other.example/2"
+
+    async def test_source_items_404_for_unknown(self, client: AsyncClient) -> None:
+        resp = await client.get("/sources/ghost/items")
+        assert resp.status_code == 404
+
+    async def test_source_items_422_for_invalid_name(self, client: AsyncClient) -> None:
+        resp = await client.get("/sources/INVALID_NAME/items")
+        assert resp.status_code == 422
+
+    async def test_respects_limit_and_offset(
+        self, client: AsyncClient, session_factory, seeded
+    ) -> None:
+        async with session_factory() as session:
+            src = await SourcesRepository(session).get_by_name("hackernews")
+            assert src is not None
+            await PgItemRepository(session).persist_items(
+                src.id,
+                [{"id": str(i), "title": f"t-{i}"} for i in range(5)],
+                dedupe_key="id",
+            )
+            await session.commit()
+
+        page1 = await client.get("/sources/hackernews/items?limit=2&offset=0")
+        page2 = await client.get("/sources/hackernews/items?limit=2&offset=2")
+        assert page1.status_code == 200
+        assert page2.status_code == 200
+        ids1 = {b["id"] for b in page1.json()}
+        ids2 = {b["id"] for b in page2.json()}
+        assert ids1.isdisjoint(ids2)
+
+    async def test_excludes_removed_items(
+        self, client: AsyncClient, session_factory, seeded
+    ) -> None:
+        async with session_factory() as session:
+            src = await SourcesRepository(session).get_by_name("hackernews")
+            assert src is not None
+            await PgItemRepository(session).persist_items(
+                src.id,
+                [{"id": "1", "title": "keep"}, {"id": "2", "title": "drop"}],
+                dedupe_key="id",
+            )
+            await PgItemRepository(session).persist_items(
+                src.id,
+                [{"id": "1", "title": "keep"}],  # "2" now removed
+                dedupe_key="id",
+            )
+            await session.commit()
+
+        resp = await client.get("/sources/hackernews/items")
+        assert resp.status_code == 200
+        titles = {b["title"] for b in resp.json()}
+        assert titles == {"keep"}

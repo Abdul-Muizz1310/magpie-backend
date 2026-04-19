@@ -144,3 +144,30 @@ class PgItemRepository:
             .offset(offset)
         )
         return result.scalars().all()
+
+    async def list_for_source(
+        self,
+        *,
+        source_id: uuid.UUID,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Sequence[Item]:
+        """Return the latest non-removed items for a source.
+
+        Unscoped by run — this is the "everything magpie currently holds for
+        this scraper" view, ordered by ``last_seen_at`` desc so the most
+        recently touched items come first.
+        """
+        result = await self._session.execute(
+            select(Item)
+            .where(
+                and_(
+                    Item.source_id == source_id,
+                    Item.removed.is_(False),
+                )
+            )
+            .order_by(desc(Item.last_seen_at))
+            .limit(limit)
+            .offset(offset)
+        )
+        return result.scalars().all()

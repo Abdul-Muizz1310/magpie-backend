@@ -18,7 +18,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from magpie.api.deps import get_db_session
+from magpie.api.items_view import item_view, source_base_url
+from magpie.schemas.jobs import RunItemView
 from magpie.storage.heals_repo import HealsRepository
+from magpie.storage.items_repo_pg import PgItemRepository
 from magpie.storage.models import Item, Run, RunStatus, Source
 from magpie.storage.runs_repo_pg import PgRunRepository
 from magpie.storage.sources_repo import SourcesRepository, SourceStats
@@ -155,6 +158,36 @@ async def list_runs(
     repo = PgRunRepository(session)
     rows = await repo.list_runs(source_name=source, limit=limit, offset=offset)
     return [_run_view(r) for r in rows]
+
+
+@router.get("/sources/{name}/items", response_model=list[RunItemView])
+async def list_source_items(
+    name: str,
+    session: _Session,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[RunItemView]:
+    """List the latest persisted items for a source.
+
+    Not tied to any single run — shows everything magpie currently holds for
+    this scraper, newest first. Removed items are filtered out; the full
+    scraped ``data`` dict is included so callers can render every field the
+    source captures, not just the normalized url/title/content_text triple.
+    """
+    if not _SOURCE_NAME_RE.match(name):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid source name format",
+        )
+    repo = SourcesRepository(session)
+    source = await repo.get_by_name(name)
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source not found")
+    items = await PgItemRepository(session).list_for_source(
+        source_id=source.id, limit=limit, offset=offset
+    )
+    base_url = source_base_url(source)
+    return [item_view(item, source_base=base_url) for item in items]
 
 
 @router.get("/heals", response_model=list[HealView])

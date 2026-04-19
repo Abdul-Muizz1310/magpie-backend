@@ -167,6 +167,9 @@ class TestListRunItemsEndpoint:
         assert titles == {"first", "second"}
         # stable_id is the dedupe_key value
         assert {item["stable_id"] for item in body} == {"1", "2"}
+        # `data` mirrors the raw scraped dict for each item
+        first = next(item for item in body if item["title"] == "first")
+        assert first["data"] == {"id": "1", "title": "first", "url": "https://example.com/1"}
 
     async def test_missing_run_returns_404(self, client: AsyncClient) -> None:
         resp = await client.get(f"/api/runs/{uuid.uuid4()}/items")

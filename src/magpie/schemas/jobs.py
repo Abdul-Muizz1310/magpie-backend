@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -36,11 +36,15 @@ class RunView(BaseModel):
 
 
 class RunItemView(BaseModel):
-    """A single item persisted during a run's time window.
+    """A single persisted scrape item.
 
     Built from the ``items`` table (not the raw scrape payload), so fields can
-    be empty when the source's config does not populate them. The frontend
-    renders whichever fields are present.
+    be empty when the source's config does not populate them. ``data`` carries
+    the full scraped dict so the frontend can render every field the source
+    captured (e.g. ``authors`` on arxiv, ``id`` on hackernews), not just the
+    normalized url/title/content_text triple.
+
+    Used by both ``GET /api/runs/{id}/items`` and ``GET /sources/{name}/items``.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -54,3 +58,4 @@ class RunItemView(BaseModel):
     first_seen_at: datetime
     last_seen_at: datetime
     html_snapshot_url: str | None = None
+    data: dict[str, Any]

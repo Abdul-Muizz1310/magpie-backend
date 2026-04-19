@@ -9,19 +9,18 @@ caller poll progress. Synchronous scraping endpoints still live in the
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Any
-from urllib.parse import urljoin
+from typing import Annotated
 
-import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from magpie.api.deps import get_db_session, get_session_factory_dep
+from magpie.api.items_view import item_view, source_base_url
 from magpie.queue.tasks import scrape_source_task
 from magpie.schemas.jobs import EnqueueResponse, RunItemView, RunView
 from magpie.schemas.scrape import ScrapeOnceRequest
 from magpie.storage.items_repo_pg import PgItemRepository
-from magpie.storage.models import Item, Run, Source
+from magpie.storage.models import Run
 from magpie.storage.runs_repo_pg import PgRunRepository
 from magpie.storage.sources_repo import SourcesRepository
 
@@ -113,84 +112,6 @@ async def get_run(run_id: uuid.UUID, session: _Session) -> RunView:
     )
 
 
-def _derive_content_text(data: dict[str, Any]) -> str:
-    parts: list[str] = []
-    for key in ("title", "content", "body", "summary"):
-        val = data.get(key)
-        if isinstance(val, str) and val:
-            parts.append(val)
-    if not parts:
-        for key in sorted(data.keys()):
-            if key in ("id", "url", "link", "href", "html_snapshot_url"):
-                continue
-            val = data.get(key)
-            if isinstance(val, str) and val:
-                parts.append(val)
-    return "\n".join(parts)
-
-
-def _extract_url(data: dict[str, Any]) -> str:
-    """Pick the first non-empty URL-ish value from the scraped item dict.
-
-    Different source configs name the URL field differently — arxiv-cs uses
-    ``link``, most others use ``url`` — so the stored ``data`` blob can carry
-    the link under any of these keys. Falling through lets the frontend render
-    a clickable link regardless.
-    """
-    for key in ("url", "link", "href"):
-        val = data.get(key)
-        if isinstance(val, str) and val:
-            return val
-    return ""
-
-
-def _resolve_url(raw: str, base: str | None) -> str:
-    """Resolve a possibly-relative URL against the source's configured base.
-
-    Sites link internally with root-relative paths (e.g. huggingface.co
-    serves ``/papers/<id>``); we need them absolute so clicking a scraped
-    item opens the site, not the magpie frontend.
-    """
-    if not raw or not base:
-        return raw
-    if raw.startswith(("http://", "https://", "mailto:", "data:")):
-        return raw
-    return urljoin(base, raw)
-
-
-def _item_view(item: Item, *, source_base_url: str | None = None) -> RunItemView:
-    data = item.data or {}
-    url_val = _extract_url(data)
-    title_val = data.get("title")
-    snapshot = data.get("html_snapshot_url")
-    return RunItemView(
-        id=item.id,
-        stable_id=item.dedupe_key,
-        url=_resolve_url(url_val, source_base_url),
-        title=str(title_val) if title_val else "",
-        content_text=_derive_content_text(data),
-        content_hash=item.content_hash,
-        first_seen_at=item.first_seen_at,
-        last_seen_at=item.last_seen_at,
-        html_snapshot_url=(
-            _resolve_url(str(snapshot), source_base_url) if isinstance(snapshot, str) else None
-        ),
-    )
-
-
-def _source_base_url(source: Source | None) -> str | None:
-    if source is None or not source.config_yaml:
-        return None
-    try:
-        parsed = yaml.safe_load(source.config_yaml)
-    except yaml.YAMLError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    url = parsed.get("url")
-    return url if isinstance(url, str) and url else None
-
-
 @router.get("/api/runs/{run_id}/items", response_model=list[RunItemView])
 async def list_run_items(
     run_id: uuid.UUID,
@@ -211,7 +132,7 @@ async def list_run_items(
             detail=f"Run {run_id} not found",
         )
     source = await SourcesRepository(session).get_by_name(run.source_name)
-    base_url = _source_base_url(source)
+    base_url = source_base_url(source)
     items = await PgItemRepository(session).list_in_window(
         source_id=run.source_id,
         started_at=run.started_at,
@@ -219,4 +140,4 @@ async def list_run_items(
         limit=limit,
         offset=offset,
     )
-    return [_item_view(item, source_base_url=base_url) for item in items]
+    return [item_view(item, source_base=base_url) for item in items]

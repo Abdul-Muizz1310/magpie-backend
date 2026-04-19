@@ -173,3 +173,52 @@ class TestListInWindow:
         await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
         items = await repo.list_in_window(source_id=src.id, started_at=started, ended_at=None)
         assert len(items) == 1
+
+
+class TestListForSource:
+    async def test_returns_non_removed_items(self, db_session) -> None:
+        src = await _make_source(db_session)
+        repo = PgItemRepository(db_session)
+        await repo.persist_items(
+            src.id,
+            [{"id": "1", "title": "A"}, {"id": "2", "title": "B"}],
+            dedupe_key="id",
+        )
+        items = await repo.list_for_source(source_id=src.id)
+        assert {i.dedupe_key for i in items} == {"1", "2"}
+
+    async def test_excludes_removed_items(self, db_session) -> None:
+        src = await _make_source(db_session)
+        repo = PgItemRepository(db_session)
+        await repo.persist_items(
+            src.id,
+            [{"id": "1", "title": "A"}, {"id": "2", "title": "B"}],
+            dedupe_key="id",
+        )
+        # Drop item 2 — marks it removed.
+        await repo.persist_items(src.id, [{"id": "1", "title": "A"}], dedupe_key="id")
+        items = await repo.list_for_source(source_id=src.id)
+        assert {i.dedupe_key for i in items} == {"1"}
+
+    async def test_respects_limit_and_offset(self, db_session) -> None:
+        src = await _make_source(db_session)
+        repo = PgItemRepository(db_session)
+        await repo.persist_items(
+            src.id,
+            [{"id": str(i), "title": f"t-{i}"} for i in range(5)],
+            dedupe_key="id",
+        )
+        page1 = await repo.list_for_source(source_id=src.id, limit=2, offset=0)
+        page2 = await repo.list_for_source(source_id=src.id, limit=2, offset=2)
+        assert len(page1) == 2
+        assert len(page2) == 2
+        assert {i.id for i in page1}.isdisjoint({i.id for i in page2})
+
+    async def test_isolates_sources(self, db_session) -> None:
+        src_a = await _make_source(db_session, "a")
+        src_b = await _make_source(db_session, "b")
+        repo = PgItemRepository(db_session)
+        await repo.persist_items(src_a.id, [{"id": "1", "title": "A"}], dedupe_key="id")
+        await repo.persist_items(src_b.id, [{"id": "1", "title": "B"}], dedupe_key="id")
+        items = await repo.list_for_source(source_id=src_a.id)
+        assert {i.data["title"] for i in items} == {"A"}
