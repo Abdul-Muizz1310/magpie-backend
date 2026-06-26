@@ -17,6 +17,7 @@ dependencies = [
     "parsel>=1.11.0",
     "playwright>=1.58.0",
     "procrastinate>=3.0",
+    "prometheus-fastapi-instrumentator>=7.0",
     "psycopg[binary]>=3.1",
     "pydantic>=2.12.5",
     "pyyaml>=6.0.3",

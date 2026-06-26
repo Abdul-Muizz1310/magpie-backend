@@ -29,19 +29,22 @@ def install_health_routes(app: FastAPI) -> None:
         except Exception:
             db_ok = False
 
+        commit_sha = os.environ.get("COMMIT_SHA", "dev")
         status_code = 200 if db_ok else 503
         return JSONResponse(
             status_code=status_code,
             content={
                 "status": "ok" if db_ok else "degraded",
                 "service": SERVICE_NAME,
-                "version": os.environ.get("COMMIT_SHA", "dev"),
+                "version": commit_sha,
+                "commit_sha": commit_sha,
                 "db": "ok" if db_ok else "down",
             },
         )
 
     @app.get("/version", include_in_schema=False)
     async def _version() -> JSONResponse:
+        commit_sha = os.environ.get("COMMIT_SHA", "dev")
         return JSONResponse(
-            {"service": SERVICE_NAME, "version": os.environ.get("COMMIT_SHA", "dev")}
+            {"service": SERVICE_NAME, "version": commit_sha, "commit_sha": commit_sha}
         )

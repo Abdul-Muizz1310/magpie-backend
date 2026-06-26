@@ -10,6 +10,7 @@ from magpie.api.routers.sources import router as sources_router
 from magpie.api.routers.viewer import router as viewer_router
 from magpie.lifespan import magpie_lifespan
 from magpie.platform.health import install_health_routes
+from magpie.platform.metrics import install_metrics
 from magpie.platform.middleware import install_middleware
 
 app = FastAPI(
@@ -19,6 +20,7 @@ app = FastAPI(
 )
 install_middleware(app)
 install_health_routes(app)
+install_metrics(app)
 app.include_router(scrape_router)
 app.include_router(jobs_router)
 app.include_router(sources_router)

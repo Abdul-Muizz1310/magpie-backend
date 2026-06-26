@@ -17,13 +17,25 @@ async def test_health_endpoint() -> None:
     body = resp.json()
     assert body["status"] == "ok"
     assert body["service"] == "magpie"
+    assert "commit_sha" in body
+    assert body["commit_sha"] == body["version"]
 
 
 async def test_version_endpoint() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         resp = await c.get("/version")
     assert resp.status_code == 200
-    assert "version" in resp.json()
+    body = resp.json()
+    assert "version" in body
+    assert "commit_sha" in body
+    assert body["commit_sha"] == body["version"]
+
+
+async def test_metrics_endpoint() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        resp = await c.get("/metrics")
+    assert resp.status_code == 200
+    assert "# HELP" in resp.text
 
 
 async def test_request_id_header() -> None:
