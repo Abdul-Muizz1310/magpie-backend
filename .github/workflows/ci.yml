@@ -42,7 +42,7 @@ jobs:
       - run: uv sync --frozen
       - name: Install Playwright chromium
         run: uv run playwright install chromium --with-deps
-      - run: uv run pytest --cov=src --cov-report=term-missing --cov-fail-under=0
+      - run: uv run pytest --cov=src --cov-report=term-missing --cov-fail-under=80
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
   build:
