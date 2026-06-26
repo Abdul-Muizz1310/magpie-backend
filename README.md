@@ -13,8 +13,8 @@
 ![neon](https://img.shields.io/badge/Neon-Postgres-00e599?style=flat-square&logo=postgresql&logoColor=white)
 ![r2](https://img.shields.io/badge/Cloudflare-R2-f38020?style=flat-square&logo=cloudflare&logoColor=white)
 [![ci](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml)
-![coverage](https://img.shields.io/badge/coverage-100%25-brightgreen?style=flat-square)
-![tests](https://img.shields.io/badge/tests-135%20passed-brightgreen?style=flat-square)
+![coverage](https://img.shields.io/badge/coverage-92%25-brightgreen?style=flat-square)
+![tests](https://img.shields.io/badge/tests-326%20passed-brightgreen?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
 
 ---
