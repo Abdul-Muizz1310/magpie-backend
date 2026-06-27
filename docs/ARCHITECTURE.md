@@ -14,7 +14,6 @@ flowchart TD
     Factory -- "true" --> PW["Playwright Runner<br/>(JS-rendered pages)"]
     Scrapy --> Extract["Item Extraction<br/>(CSS selectors via parsel)"]
     PW --> Extract
-    Extract --> Archive["R2 Archive<br/>(raw HTML snapshot)"]
     Extract --> Hash["Content Hashing<br/>(normalize → SHA-256)"]
     Hash --> Dedupe["Dedupe Pipeline<br/>(new / updated / removed / reappeared)"]
     Dedupe --> DB[("Neon Postgres<br/>(scrape branch)")]
@@ -22,7 +21,7 @@ flowchart TD
     Check -- "no" --> Healer["Self-healing pipeline"]
     Check -- "yes" --> Done["Run complete"]
     Healer --> LLM["OpenRouter LLM<br/>(selector fixer)"]
-    LLM --> Validate["Validator<br/>(run selector on R2 snapshot)"]
+    LLM --> Validate["Validator<br/>(run selector on re-fetched HTML)"]
     Validate -- "valid" --> PR["GitHub PR<br/>(scrape:self-heal label)"]
     Validate -- "invalid" --> Log["Log error, skip PR"]
     DB --> API["FastAPI Viewer API"]
@@ -34,23 +33,23 @@ flowchart TD
 
 ## Self-healing pipeline
 
-When a scrape run returns fewer items than `health.min_items`, the healer activates. It uses the most recent R2 HTML snapshot (archived before parsing) so the LLM can propose fixes against the actual page structure.
+When a scrape run returns fewer items than `health.min_items`, the healer activates. It re-fetches the source's current HTML (`healer/apply.py:_fetch_html` — Playwright for JS-rendered sources, `httpx` otherwise) so the LLM proposes fixes against the live page structure. (Archiving the exact pre-parse HTML to R2 — so the healer sees what the scraper saw rather than a later fetch — is future work; see the storage note below.)
 
 ```mermaid
 sequenceDiagram
     participant Run as Scrape Run
     participant Det as detector.py<br/>should_heal()
-    participant R2 as R2 Archive<br/>(HTML snapshot)
+    participant Fetch as apply.py<br/>_fetch_html (live)
     participant LLM as selector_fixer.py<br/>OpenRouter LLM
     participant Val as validator.py
     participant GH as github_pr.py
 
     Run->>Det: item_count < min_items?
-    Det->>R2: Fetch latest snapshot for source
-    R2-->>Det: raw HTML
+    Det->>Fetch: re-fetch source's current HTML
+    Fetch-->>Det: raw HTML
     Det->>LLM: Broken selector + HTML + prompt<br/>(prompts/fix_selector.md)
     LLM-->>Det: Proposed new CSS selector
-    Det->>Val: Run proposed selector on snapshot HTML
+    Det->>Val: Run proposed selector on re-fetched HTML
     alt items found with new selector
         Val-->>Det: Valid (N items extracted)
         Det->>GH: Create/update PR with<br/>updated YAML config
@@ -152,7 +151,7 @@ src/magpie/
 ├── healer/
 │   ├── detector.py        # should_heal() threshold check
 │   ├── selector_fixer.py  # LLM call to fix broken selectors
-│   ├── validator.py       # Run proposed selector on HTML snapshot
+│   ├── validator.py       # Run proposed selector on re-fetched HTML
 │   ├── github_pr.py       # Create/update heal PRs
 │   └── prompts/
 │       └── fix_selector.md
@@ -167,11 +166,10 @@ src/magpie/
 1. **Load** -- YAML config validated into `SourceConfig` via Pydantic (strict, extra=forbid)
 2. **Dispatch** -- Factory checks `render` flag, returns Scrapy spider class or PlaywrightRunner
 3. **Extract** -- CSS selectors applied to HTML via parsel; items collected as dicts
-4. **Archive** -- Raw HTML snapshot saved to R2 before parsing (healer needs this)
-5. **Hash** -- Each item normalized (whitespace stripped, Unicode NFC, keys sorted) and SHA-256 hashed
-6. **Dedupe** -- Compare hashes against DB; classify as new / updated / removed / reappeared
-7. **Persist** -- Upsert items, update `seen_last`, soft-delete removed items
-8. **Heal** -- If `item_count < health.min_items`, healer fires: LLM proposes new selector, validator checks it against the snapshot, and a GitHub PR is opened if valid
+4. **Hash** -- Each item normalized (whitespace stripped, Unicode NFC, keys sorted) and SHA-256 hashed
+5. **Dedupe** -- Compare hashes against DB; classify as new / updated / removed / reappeared
+6. **Persist** -- Upsert items, update `seen_last`, soft-delete removed items
+7. **Heal** -- If `item_count < health.min_items`, healer fires: it re-fetches the source's current HTML, the LLM proposes a new selector, the validator checks it against that HTML, and a GitHub PR is opened if valid
 
 ## Key design decisions
 
@@ -182,5 +180,5 @@ src/magpie/
 | No auto-merge on heal PRs | Audit trail > convenience; broken selectors need human review |
 | File-based LLM prompts | Prompts in `prompts/*.md` with frontmatter, not inline strings |
 | `extra="forbid"` on all Pydantic models | Catches typos in YAML configs at load time |
-| R2 snapshots before parse | Healer needs the exact HTML the scraper saw, not a later fetch |
+| Healer re-fetches HTML live (R2 archive is future) | Keeps the healer dependency-free today; archiving the exact pre-parse snapshot to R2 — so it sees what the scraper saw, not a later fetch — is the planned upgrade |
 | SHA-256 per item (not page) | Detects partial changes; one updated listing doesn't invalidate the whole run |

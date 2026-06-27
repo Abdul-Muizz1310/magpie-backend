@@ -11,7 +11,6 @@
 ![fastapi](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
 ![pydantic](https://img.shields.io/badge/Pydantic-v2%20strict-e92063?style=flat-square)
 ![neon](https://img.shields.io/badge/Neon-Postgres-00e599?style=flat-square&logo=postgresql&logoColor=white)
-![r2](https://img.shields.io/badge/Cloudflare-R2-f38020?style=flat-square&logo=cloudflare&logoColor=white)
 [![ci](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml)
 ![coverage](https://img.shields.io/badge/coverage-92%25-brightgreen?style=flat-square)
 ![tests](https://img.shields.io/badge/tests-326%20passed-brightgreen?style=flat-square)
@@ -75,7 +74,7 @@ sequenceDiagram
     participant Cron as GitHub Actions<br/>nightly cron
     participant Spider as Spider Factory
     participant Detect as Failure Detector
-    participant R2 as Cloudflare R2
+    participant Fetch as Live re-fetch<br/>(Playwright / httpx)
     participant LLM as OpenRouter LLM
     participant Valid as Selector Validator
     participant GH as GitHub API
@@ -83,8 +82,8 @@ sequenceDiagram
     Cron->>Spider: run source config
     Spider-->>Detect: 0 items returned
     Detect->>Detect: items < min_items threshold
-    Detect->>R2: snapshot raw HTML
-    R2-->>Detect: snapshot URL
+    Detect->>Fetch: re-fetch source's current HTML
+    Fetch-->>Detect: raw HTML
     Detect->>LLM: raw HTML + old selectors
     LLM-->>Detect: new CSS selectors
     Detect->>Valid: test selectors against HTML
@@ -146,8 +145,8 @@ flowchart TD
     Hash --> Dedupe["Dedupe engine"]
     Dedupe --> DB[("Neon Postgres<br/>async SQLAlchemy")]
     Dedupe --> Check{"items < min?"}
-    Check -- "yes" --> Snapshot["Snapshot HTML → R2"]
-    Snapshot --> LLM["OpenRouter LLM<br/>re-derive selectors"]
+    Check -- "yes" --> Refetch["Re-fetch live HTML<br/>(Playwright / httpx)"]
+    Refetch --> LLM["OpenRouter LLM<br/>re-derive selectors"]
     LLM --> Validate["Validate new selectors"]
     Validate --> PR["GitHub PR<br/>scrape:self-heal"]
     Check -- "no" --> Done([Done])
@@ -344,7 +343,7 @@ uv run pytest --cov=src/magpie --cov-report=term-missing
 | 🛡️ **Negative-space programming** | `extra="forbid"` rejects unknown YAML keys. Frozen models prevent mutation after load. Content hashing normalizes unicode before comparison. |
 | 🏗️ **MVC layering** | `platform` (HTTP) + `storage` (data) + `healer`/`scrapy`/`playwright` (business logic). No layer reaches across. |
 | 🔤 **Typed everything** | Pydantic v2 strict mode. Frozen config models. No untyped dicts crossing module boundaries. |
-| 🌊 **Pure core, imperative shell** | Hashing, dedup logic, config parsing = pure. I/O (DB, R2, GitHub, LLM) at the edges. |
+| 🌊 **Pure core, imperative shell** | Hashing, dedup logic, config parsing = pure. I/O (DB, HTTP fetch, GitHub, LLM) at the edges. |
 
 ---
 
@@ -355,7 +354,7 @@ uv run pytest --cov=src/magpie --cov-report=term-missing
 | **Viewer API** | Render free tier at `magpie-backend-izzu.onrender.com` |
 | **Scheduled scrapes** | GitHub Actions cron (every 6 hours) |
 | **Heal-on-failure** | GitHub Actions `workflow_run` trigger |
-| **Raw HTML snapshots** | Cloudflare R2 (`muizz-lab` bucket, `scrape/` prefix) |
+| **Heal HTML source** | Live re-fetch at heal time (Playwright / httpx); R2 snapshot archiving (`muizz-lab` bucket, `scrape/` prefix) is planned, not yet wired |
 
 ---
 
