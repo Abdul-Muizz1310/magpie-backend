@@ -50,14 +50,36 @@ async def test_request_id_generated_if_absent() -> None:
     assert resp.headers.get("x-request-id")
 
 
-def test_configure_logging_dev() -> None:
+def _active_log_format() -> str:
+    """Return the format string of the root logger's active handler."""
+    handler = logging.getLogger().handlers[0]
+    assert handler.formatter is not None
+    return handler.formatter._fmt or ""
+
+
+def test_configure_logging_dev(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.delenv("APP_ENV", raising=False)
     configure_logging()
     root = logging.getLogger()
     assert root.level == logging.INFO
+    # Dev uses the human-readable format, not JSON.
+    assert "[magpie]" in _active_log_format()
 
 
 def test_configure_logging_prod(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setenv("ENVIRONMENT", "production")
+    # The stack sets APP_ENV in production (render.yaml / Dockerfile), so JSON
+    # logging must key on APP_ENV — a regression test for the ENVIRONMENT bug.
+    monkeypatch.setenv("APP_ENV", "production")
     configure_logging()
     root = logging.getLogger()
     assert root.level == logging.INFO
+    fmt = _active_log_format()
+    assert fmt.startswith("{") and '"service":"magpie"' in fmt
+
+
+def test_configure_logging_ignores_legacy_environment_var(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """ENVIRONMENT=production alone must NOT enable JSON — only APP_ENV does."""
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    configure_logging()
+    assert "[magpie]" in _active_log_format()

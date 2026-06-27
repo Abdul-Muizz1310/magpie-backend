@@ -13,7 +13,10 @@ SERVICE_NAME = "magpie"
 
 def configure_logging() -> None:
     """Set up standard Python logging with JSON-friendly format in prod."""
-    is_prod = os.environ.get("ENVIRONMENT", "development") == "production"
+    # The stack sets APP_ENV (render.yaml, Dockerfile, middleware), so key the
+    # prod JSON format on APP_ENV — not ENVIRONMENT, which is never set and
+    # silently kept JSON logging off in production.
+    is_prod = os.environ.get("APP_ENV", "development") == "production"
 
     if is_prod:
         fmt = (
