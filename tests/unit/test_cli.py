@@ -66,6 +66,16 @@ class TestRunCommand:
         rc = await cli_module._run_one("ghost", max_items=5)
         assert rc == 2
 
+    async def test_run_underflow_returns_exit_underflow(self, session_factory) -> None:
+        """A near-empty scrape (< min_items) exits non-zero so CI escalates to heal (MAG-1)."""
+        await _seed(session_factory)  # default health.min_items == 1
+        with patch(
+            "magpie.services.scrape_service._execute_static",
+            new=AsyncMock(return_value=[]),
+        ):
+            rc = await cli_module._run_one("cli-src", max_items=5)
+        assert rc == cli_module.EXIT_UNDERFLOW
+
     async def test_run_all_with_no_configs(self, empty_configs) -> None:
         rc = await cli_module._run_all(max_items=5)
         assert rc == 0
@@ -115,7 +125,7 @@ class TestMainDispatch:
         asyncio.run(_seed(session_factory))
         with patch(
             "magpie.services.scrape_service._execute_static",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=[{"id": "a", "title": "t", "url": "https://example.com/a"}]),
         ):
             rc = cli_module.main(["run", "cli-src", "--max-items", "5"])
         assert rc == 0
@@ -126,3 +136,40 @@ class TestMainDispatch:
         )
         rc = cli_module.main(["sync"])
         assert rc == 0
+
+
+class TestDueCommand:
+    def test_due_all_emits_every_source(self, empty_configs, capsys) -> None:
+        import json
+
+        (empty_configs / "a.yaml").write_text(
+            SAMPLE_YAML.replace("cli-src", "src-a"), encoding="utf-8"
+        )
+        (empty_configs / "b.yaml").write_text(
+            SAMPLE_YAML.replace("cli-src", "src-b"), encoding="utf-8"
+        )
+        rc = cli_module.main(["due", "--all"])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out.strip())
+        assert set(payload["sources"]) == {"src-a", "src-b"}
+
+    def test_due_filters_by_schedule(self, empty_configs, capsys, monkeypatch) -> None:
+        import json
+        from datetime import UTC, datetime
+
+        # A source scheduled weekly on Sunday; "now" is a Saturday -> not due.
+        weekly = SAMPLE_YAML.replace("cli-src", "weekly-src").replace(
+            'schedule: "0 */6 * * *"', 'schedule: "0 0 * * 0"'
+        )
+        (empty_configs / "weekly.yaml").write_text(weekly, encoding="utf-8")
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):  # type: ignore[override]
+                return datetime(2026, 7, 4, 12, 30, tzinfo=UTC)
+
+        monkeypatch.setattr(cli_module, "datetime", _FrozenDatetime)
+        rc = cli_module.main(["due", "--window-seconds", "3600"])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out.strip())
+        assert payload["sources"] == []

@@ -4,8 +4,8 @@
 
 Three GitHub Actions workflows:
 1. **CI** (`ci.yml`) — lint + test (against a real Postgres service) + Docker build on every push to `main` and every PR.
-2. **Weekly scrape** (`nightly-scrape.yml`, name kept for history) — runs every file-origin source every Sunday 00:00 UTC via a matrix strategy.
-3. **Heal-on-failure** (`heal-on-failure.yml`) — triggers when the weekly scrape fails; invokes `magpie.healer.run` to fix broken selectors.
+2. **Scheduled scrape** (`nightly-scrape.yml`, name kept for history) — runs hourly; `magpie due` filters the matrix to the sources whose own per-source `schedule` cron fires in the current hour, so each source's declared cadence is honoured (6-hourly, daily, weekly, …) rather than one global cadence.
+3. **Heal-on-failure** (`heal-on-failure.yml`) — triggers when the scrape workflow fails (a scrape leg exits non-zero on a hard error *or* on min-item underflow); invokes `magpie.healer.run`, which heals both failed runs and sources whose latest OK run underflowed `health.min_items`.
 
 ## Workflows
 
@@ -17,16 +17,16 @@ Three GitHub Actions workflows:
 
 ### `nightly-scrape.yml`
 
-- **Trigger:** `schedule` (cron `0 0 * * 0` — weekly Sunday 00:00 UTC) + `workflow_dispatch` (manual)
-- **Strategy:** a `discover` job reads every `configs/*.yaml`, extracts the names, and emits two JSON arrays (`sources`, `js_sources`) as job outputs. The downstream `run` job's matrix is `fromJson(needs.discover.outputs.sources)` with `fail-fast: false`, so adding a new YAML automatically adds a CI leg with no workflow edit needed.
-- **Steps (per matrix leg):** checkout, setup python 3.12, install uv, sync deps, install Playwright chromium **only if the source appears in `js_sources`**, apply Alembic migrations, run `magpie run <source>`.
+- **Trigger:** `schedule` (cron `0 * * * *` — hourly) + `workflow_dispatch` (manual)
+- **Strategy:** a `discover` job runs `magpie due --window-seconds 3600`, which reads every `configs/*.yaml` and emits two JSON arrays (`sources`, `js_sources`) containing only the sources whose per-source `schedule` cron fires within the last hour. Manual `workflow_dispatch` passes `--all` to bypass the filter and run every source. The downstream `run` job's matrix is `fromJson(needs.discover.outputs.sources)` with `fail-fast: false`; an empty array simply skips the `run` job that hour.
+- **Steps (per matrix leg):** checkout, setup python 3.12, install uv, sync deps, install Playwright chromium **only if the source appears in `js_sources`**, apply Alembic migrations, run `magpie run <source>` (exits non-zero on min-item underflow, escalating to heal-on-failure).
 - **Secrets needed:** `DATABASE_URL`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`.
 
 ### `heal-on-failure.yml`
 
-- **Trigger:** `workflow_run` on `nightly-scrape` with type `completed`, condition `conclusion == 'failure'`
+- **Trigger:** `workflow_run` on `nightly-scrape` with type `completed`, condition `conclusion == 'failure'` (plus manual `workflow_dispatch`)
 - **Permissions:** `contents: write`, `pull-requests: write`
-- **Steps:** checkout, setup python 3.12, install uv, sync deps, run `python -m magpie.healer.run` (walks the most-recent failed runs in Postgres and heals each source).
+- **Steps:** checkout, setup python 3.12, install uv, sync deps, run `python -m magpie.healer.run` (heals the most-recent failed runs *and* any source whose latest OK run underflowed `health.min_items`, so silent selector drift is caught too).
 - **Secrets needed:** `OPENROUTER_API_KEY`, `PAT_SCRAPE_HEALER` (mapped to env `GITHUB_PAT_SCRAPE_HEALER`), `R2_*`, `DATABASE_URL`, plus the hardcoded `GITHUB_REPO` and `GITHUB_HEAL_LABEL` env vars.
 
 ## Invariants

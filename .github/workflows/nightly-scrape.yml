@@ -1,8 +1,10 @@
 name: nightly-scrape
 on:
   schedule:
-    # Weekly on Sunday at 00:00 UTC.
-    - cron: "0 0 * * 0"
+    # Runs hourly; the ``discover`` job filters to the sources whose own
+    # per-source ``schedule`` cron actually fires in this hour (so a 6-hourly
+    # source runs 4x/day and a weekly one runs Sunday 00:00, all honoured).
+    - cron: "0 * * * *"
   workflow_dispatch:
     inputs:
       source:
@@ -11,10 +13,10 @@ on:
 
 jobs:
   # Discover the matrix from configs/*.yaml so adding a new config doesn't
-  # require editing this workflow. Emits two JSON arrays:
-  #   sources    — every config name
-  #   js_sources — sources with ``render: true`` (Playwright chromium only
-  #                installed for those to keep matrix cold-start fast).
+  # require editing this workflow. ``magpie due`` filters to the sources due
+  # this hour per their declared cron (manual dispatch runs all via --all).
+  # Emits two JSON arrays: ``sources`` and ``js_sources`` (render:true only,
+  # so Playwright chromium is installed just for those legs).
   discover:
     runs-on: ubuntu-latest
     outputs:
@@ -24,30 +26,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install pyyaml
+      - run: pip install uv
+      - run: uv sync --frozen
       - id: find
-        shell: python
-        run: |
-          import json
-          import os
-          import pathlib
-
-          import yaml
-
-          all_sources: list[str] = []
-          js_sources: list[str] = []
-          for path in sorted(pathlib.Path("configs").glob("*.yaml")):
-              data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-              name = data.get("name")
-              if not name:
-                  continue
-              all_sources.append(name)
-              if data.get("render"):
-                  js_sources.append(name)
-
-          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
-              fh.write(f"sources={json.dumps(all_sources)}\n")
-              fh.write(f"js_sources={json.dumps(js_sources)}\n")
+        env:
+          # Hourly cadence -> 1h look-back window so each cron fires once.
+          WINDOW_SECONDS: "3600"
+        run: >-
+          uv run python -m magpie.cli due
+          --window-seconds "$WINDOW_SECONDS"
+          ${{ github.event_name == 'workflow_dispatch' && '--all' || '' }}
 
   run:
     needs: discover
