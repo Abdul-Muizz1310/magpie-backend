@@ -15,6 +15,7 @@ from magpie.platform.health import install_health_routes
 from magpie.platform.metrics import install_metrics
 from magpie.platform.middleware import install_middleware
 from magpie.platform.platform_token import install_platform_token
+from magpie.platform.rate_limit import install_rate_limit
 
 app = FastAPI(
     title="magpie",
@@ -24,7 +25,11 @@ app = FastAPI(
 install_middleware(app)
 install_health_routes(app)
 install_metrics(app)
-demo_mode = os.environ.get("DEMO_MODE", "true").strip().lower() not in {"0", "false", "no", ""}
+install_rate_limit(app)
+# Fail closed: an *unset* DEMO_MODE must NOT silently bypass auth. Demo mode is
+# opt-in and only true when explicitly enabled; anything else enforces the
+# platform-token middleware (which still fails open when no bastion key is set).
+demo_mode = os.environ.get("DEMO_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
 install_platform_token(app, demo_mode=demo_mode)
 app.include_router(scrape_router)
 app.include_router(jobs_router)

@@ -8,6 +8,14 @@ fixtures in ``tests/unit/test_models_and_migrations.py``.
 
 from __future__ import annotations
 
+import os
+
+# Disable the per-IP rate limiter for the shared ``magpie.main.app`` used across
+# router tests (the limit is read once at app-import time). The limiter's own
+# behaviour is covered in tests/unit/test_rate_limit.py with an explicit limit.
+# Must run before any test module imports ``magpie.main``.
+os.environ["RATE_LIMIT_PER_MINUTE"] = "0"
+
 from collections.abc import AsyncIterator
 
 import pytest

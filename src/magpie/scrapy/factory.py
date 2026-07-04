@@ -10,6 +10,7 @@ from parsel import Selector
 from scrapy.http import Response
 
 from magpie.config.schema import SourceConfig
+from magpie.core.safe_fetch import safe_get_sync
 
 USER_AGENT = "magpie/0.1 (+https://github.com/Abdul-Muizz1310/magpie-backend)"
 """Identifies us politely on every outbound fetch — Wikipedia and many other
@@ -42,7 +43,11 @@ def _extract_items_from_html(html: str, config: SourceConfig) -> list[dict[str, 
                 if "::text" in selector or "::attr" in selector:
                     values = element.css(selector).getall()
                 elif field.attr:
-                    val = element.attrib.get(field.attr)
+                    # Run the field's own selector first, then read ``attr`` off
+                    # the matched sub-element. Reading the attribute directly off
+                    # the container would ignore ``field.selector`` entirely.
+                    matched = element.css(selector)
+                    val = matched[0].attrib.get(field.attr) if matched else None
                     values = [val] if val else []
                 else:
                     values = element.css(selector).getall()
@@ -106,13 +111,15 @@ def run_spider(config: SourceConfig) -> list[dict[str, Any]]:
     url = str(config.url)
     pages_scraped = 0
 
+    # follow_redirects=False: safe_get_sync follows manually and re-validates
+    # every redirect host against the SSRF allowlist (no internal-address hops).
     with httpx.Client(
         timeout=30.0,
-        follow_redirects=True,
+        follow_redirects=False,
         headers={"User-Agent": USER_AGENT},
     ) as client:
         while url and pages_scraped < config.pagination.max_pages:
-            resp = client.get(url)
+            resp = safe_get_sync(client, url)
             resp.raise_for_status()
             html = resp.text
             pages_scraped += 1

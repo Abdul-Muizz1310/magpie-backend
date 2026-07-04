@@ -139,7 +139,10 @@ class PaginationDef(BaseModel):
 
     next: str | None = None
     next_type: SelectorType = "css"
-    max_pages: int = Field(default=1, ge=1)
+    # Upper-bounded so a submitted source can't tie up a synchronous scrape
+    # worker for an unbounded number of page fetches (DoS lever on the
+    # default-open API).
+    max_pages: int = Field(default=1, ge=1, le=20)
 
     @model_validator(mode="after")
     def _next_compiles(self) -> PaginationDef:

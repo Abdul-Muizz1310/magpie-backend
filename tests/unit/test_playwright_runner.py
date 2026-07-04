@@ -224,6 +224,8 @@ class TestPlaywrightExtractionParity:
             item={
                 "container": "div.card",
                 "fields": [
+                    # ``attr`` reads off the element matched by ``selector`` (the
+                    # inner <a>), not the container div.
                     {"name": "link", "selector": "a", "attr": "data-href"},
                     {"name": "id", "selector": "::attr(data-id)"},
                 ],
@@ -232,8 +234,8 @@ class TestPlaywrightExtractionParity:
         )
         html = """
         <html><body>
-        <div class="card" data-id="1" data-href="/page1"><a>Link</a></div>
-        <div class="card" data-id="2" data-href="/page2"><a>Link</a></div>
+        <div class="card" data-id="1"><a data-href="/page1">Link</a></div>
+        <div class="card" data-id="2"><a data-href="/page2">Link</a></div>
         </body></html>
         """
         items = _extract_items_from_html(html, cfg)

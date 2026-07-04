@@ -22,8 +22,13 @@ CONFIGS = Path(__file__).resolve().parent.parent.parent / "configs"
 class TestBuildSpiderClassParse:
     """Cover lines 29-33 and 60-71 of scrapy/factory.py (attr extraction + parse method)."""
 
-    def test_extract_items_attr_field(self) -> None:
-        """Test _extract_items_from_html with an attr field on the container."""
+    def test_extract_items_attr_field_reads_from_matched_subelement(self) -> None:
+        """``attr`` reads the attribute off the element matched by ``selector``.
+
+        The attribute lives on the inner ``<a>`` selected by ``field.selector``,
+        NOT on the container — regression guard for the bug where the extractor
+        ignored the field selector and read ``attr`` off the container element.
+        """
         config = SourceConfig(
             name="test-attr",
             url="https://example.com",
@@ -31,7 +36,7 @@ class TestBuildSpiderClassParse:
             item={
                 "container": "div.card",
                 "fields": [
-                    {"name": "link", "selector": "a", "attr": "data-href"},
+                    {"name": "link", "selector": "a.target", "attr": "href"},
                     {"name": "id", "selector": "::attr(data-id)"},
                 ],
                 "dedupe_key": "id",
@@ -39,13 +44,43 @@ class TestBuildSpiderClassParse:
         )
         html = """
         <html><body>
-        <div class="card" data-id="1" data-href="/page1"><a>Link</a></div>
-        <div class="card" data-id="2" data-href="/page2"><a>Link</a></div>
+        <div class="card" data-id="1" href="/should-not-be-picked">
+            <a>ignore</a><a class="target" href="/page1">Link</a>
+        </div>
+        <div class="card" data-id="2" href="/wrong">
+            <a class="target" href="/page2">Link</a>
+        </div>
         </body></html>
         """
         items = _extract_items_from_html(html, config)
         assert len(items) == 2
+        # Value comes from the matched <a class="target">, not the container div.
         assert items[0]["link"] == "/page1"
+        assert items[1]["link"] == "/page2"
+
+    def test_extract_items_attr_field_missing_subelement_is_none(self) -> None:
+        """When the field selector matches nothing, ``attr`` yields None (no crash)."""
+        config = SourceConfig(
+            name="test-attr-missing",
+            url="https://example.com",
+            schedule="0 */6 * * *",
+            item={
+                "container": "div.card",
+                "fields": [
+                    {"name": "link", "selector": "a.target", "attr": "href"},
+                    {"name": "id", "selector": "::attr(data-id)"},
+                ],
+                "dedupe_key": "id",
+            },
+        )
+        html = """
+        <html><body>
+        <div class="card" data-id="1" href="/container-attr"><span>no anchor</span></div>
+        </body></html>
+        """
+        items = _extract_items_from_html(html, config)
+        assert len(items) == 1
+        assert items[0]["link"] is None
 
     def test_extract_items_plain_selector_no_pseudo(self) -> None:
         """Selector without ::text or ::attr falls to else branch (line 33)."""
