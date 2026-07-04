@@ -3,7 +3,7 @@
 > 🔧 **YAML-defined scrapers that self-heal via LLM + PR.**
 > One config = one spider. When selectors break, an LLM patches them and opens a pull request.
 
-🌐 [Live API](https://magpie-backend-izzu.onrender.com/health) · 📖 [Why](WHY.md) · 🏗️ [Architecture](docs/ARCHITECTURE.md) · 🎬 [Demo](docs/DEMO.md)
+🌐 [Live API](https://magpie-backend-t4bb.onrender.com/health) · 📖 [Why](WHY.md) · 🏗️ [Architecture](docs/ARCHITECTURE.md) · 🎬 [Demo](docs/DEMO.md)
 
 ![python](https://img.shields.io/badge/python-3.12+-3776ab?style=flat-square&logo=python&logoColor=white)
 ![scrapy](https://img.shields.io/badge/Scrapy-60a839?style=flat-square&logo=scrapy&logoColor=white)
@@ -351,7 +351,7 @@ uv run pytest --cov=src/magpie --cov-report=term-missing
 
 | Component | Target |
 |---|---|
-| **Viewer API** | Render free tier at `magpie-backend-izzu.onrender.com` |
+| **Viewer API** | Render free tier at `magpie-backend-t4bb.onrender.com` |
 | **Scheduled scrapes** | GitHub Actions hourly cron → `magpie due` filters to sources whose per-source `schedule` fires this hour |
 | **Heal-on-failure** | GitHub Actions `workflow_run` trigger (fires on scrape failure, incl. underflow-flagged runs) |
 | **Heal HTML source** | Live re-fetch at heal time (Playwright / httpx); R2 snapshot archiving (`muizz-lab` bucket, `scrape/` prefix) is planned, not yet wired |

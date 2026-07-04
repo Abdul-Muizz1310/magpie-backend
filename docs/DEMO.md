@@ -90,9 +90,9 @@ Each heal row records: field name, old + new selector, confidence, LLM reasoning
 
 ## 7. Show the viewer API in a browser (10s)
 
-- `https://magpie-backend-izzu.onrender.com/sources` → source list
-- `https://magpie-backend-izzu.onrender.com/runs` → run history
-- `https://magpie-backend-izzu.onrender.com/heals` → heal history
+- `https://magpie-backend-t4bb.onrender.com/sources` → source list
+- `https://magpie-backend-t4bb.onrender.com/runs` → run history
+- `https://magpie-backend-t4bb.onrender.com/heals` → heal history
 
 The frontend (magpie-frontend) consumes these.
 
