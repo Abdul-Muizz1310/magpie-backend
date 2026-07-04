@@ -31,9 +31,12 @@ When a scrape returns fewer items than `health.min_items`, automatically attempt
 - LLM response must be valid JSON matching `{selector, confidence, reasoning, sample_values}`
 - Proposed selector must extract >= 1 item from the snapshot to be accepted
 - If selector is null or extracts 0 items, no PR is created (error logged)
-- LLM call uses OpenRouter with the model from `OPENROUTER_MODEL_PRIMARY`
-- LLM prompt is loaded from `healer/prompts/fix_selector.md` (file-based, not inline)
-- PR branch name: `heal/<source-name>-<timestamp>`
+- LLM call uses OpenRouter with the model from `OPENROUTER_MODEL_PRIMARY` (defaults to the free-tier slug in code, never a paid model)
+- On transient LLM errors (429/5xx) the fixer retries up to 3 times with exponential backoff, honouring `Retry-After` on 429
+- Before prompting, the page HTML is stripped of `<script>`/`<style>`/comments and windowed around the broken selector so large pages don't blind the LLM
+- LLM prompt is currently built inline in `selector_fixer._call_llm` (a `healer/prompts/` file is not yet used)
+- PR branch name: `heal/<source-name>` (idempotent — one heal branch/PR per source, updated in place rather than spamming new PRs)
+- Branch + commit are created via the GitHub Git Data API (blob → tree → commit → ref) so the patched `configs/<source>.yaml` actually lands on the branch before the PR is opened
 - PR label: value of `GITHUB_HEAL_LABEL` env var (default `scrape:self-heal`)
 - GitHub operations use `GITHUB_PAT_SCRAPE_HEALER` token (fine-grained, contents:write + PRs:write)
 

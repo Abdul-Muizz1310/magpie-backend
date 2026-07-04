@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import unicodedata
 import uuid
 from datetime import UTC, datetime
@@ -20,12 +21,15 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from magpie.config.schema import SourceConfig
+from magpie.healer.detector import should_heal
 from magpie.schemas.scrape import ScrapeFailure, ScrapeItem, ScrapeResult
 from magpie.scrapy.factory import run_spider
 from magpie.storage.items_repo_pg import PgItemRepository
 from magpie.storage.models import Source
 from magpie.storage.runs_repo_pg import PgRunRepository
 from magpie.storage.sources_repo import SourceNotFoundError, SourcesRepository
+
+log = logging.getLogger("magpie.services.scrape")
 
 # ── Typed exceptions ────────────────────────────────────────────────────────
 
@@ -156,6 +160,23 @@ async def _resolve_source(session: AsyncSession, name: str) -> tuple[Source, Sou
     return row, config
 
 
+async def _enqueue_heal(*, source: str, run_id: uuid.UUID | None) -> bool:
+    """Best-effort defer of a heal task for an underflowed run.
+
+    Returns True if the heal was enqueued. No-ops (returns False) when the
+    Procrastinate queue isn't available — e.g. the synchronous CLI/CI path,
+    which relies on a non-zero exit + the ``heal-on-failure`` workflow instead.
+    """
+    try:
+        from magpie.queue.tasks import heal_source_task
+
+        await heal_source_task.defer_async(source=source, run_id=str(run_id) if run_id else None)
+        return True
+    except Exception:
+        log.debug("could not enqueue heal for %s (queue unavailable)", source, exc_info=True)
+        return False
+
+
 # ── Public service API ──────────────────────────────────────────────────────
 
 
@@ -216,6 +237,20 @@ async def scrape_once(
             started_at=started_at,
         )
         await session.commit()
+
+    # Heal-on-underflow lives here — the single choke point every caller shares
+    # (sync /scrape, /enqueue task, CLI, and scrape_batch) — so silent selector
+    # drift that yields near-empty results triggers the LLM self-heal regardless
+    # of which entrypoint ran the scrape (MAG-1).
+    item_count = len(scrape_items)
+    if should_heal(item_count=item_count, min_items=config.health.min_items):
+        log.info(
+            "source %s underflowed (%d < min_items=%d) — attempting heal",
+            source_row.name,
+            item_count,
+            config.health.min_items,
+        )
+        await _enqueue_heal(source=source_row.name, run_id=run_id)
 
     return ScrapeResult(
         source=source_row.name,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import yaml
 
@@ -357,8 +357,11 @@ item:
         from magpie.healer import apply as apply_mod
 
         fake_response = AsyncMock()
-        fake_response.raise_for_status = AsyncMock()
+        # raise_for_status is sync on real httpx responses.
+        fake_response.raise_for_status = MagicMock()
         fake_response.text = self.STUB_HTML
+        # Not a redirect: safe_get_async returns this response as-is.
+        fake_response.is_redirect = False
 
         fake_client = AsyncMock()
         fake_client.get = AsyncMock(return_value=fake_response)

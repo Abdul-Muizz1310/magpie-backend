@@ -19,7 +19,6 @@ from magpie.queue.app import queue_app
 from magpie.services.scrape_service import ScrapeExecutionError, scrape_once
 from magpie.storage.db import get_session_factory
 from magpie.storage.runs_repo_pg import PgRunRepository
-from magpie.storage.sources_repo import SourcesRepository
 
 # A run that's been in ``running`` for longer than this is almost certainly
 # orphaned by a worker crash or a Render free-tier sleep. The reaper moves
@@ -42,7 +41,11 @@ async def scrape_source_task(
     max_items: int = 20,
     run_id: str | None = None,
 ) -> dict[str, Any]:
-    """Execute one scrape run. ``run_id`` ties back to a pre-created runs row."""
+    """Execute one scrape run. ``run_id`` ties back to a pre-created runs row.
+
+    Heal-on-underflow is handled inside ``scrape_once`` (the shared choke point),
+    so this task stays a thin wrapper — no duplicate underflow check here (MAG-1).
+    """
     factory = get_session_factory()
     parsed_run_id = uuid.UUID(run_id) if run_id else None
 
@@ -52,17 +55,6 @@ async def scrape_source_task(
         session_factory=factory,
         run_id=parsed_run_id,
     )
-
-    # If the run underflowed the source's health threshold, enqueue a heal.
-    async with factory() as session:
-        repo = SourcesRepository(session)
-        config = await repo.get_config(source)
-    min_items = config.health.min_items
-    if min_items > 0 and len(result.items) < min_items:
-        await heal_source_task.defer_async(
-            source=source,
-            run_id=str(result.run_id),
-        )
 
     return {
         "run_id": str(result.run_id),

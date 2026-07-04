@@ -8,7 +8,119 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from magpie.healer.selector_fixer import _call_llm, fix_selector
+from magpie.healer.selector_fixer import DEFAULT_MODEL, _call_llm, fix_selector
+
+
+def _mock_llm_client() -> tuple[AsyncMock, AsyncMock]:
+    """Build a mocked httpx.AsyncClient context manager returning a valid LLM body.
+
+    Returns (context_manager, client) so callers can assert on ``client.post``.
+    """
+    llm_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": '{"selector": "div.new", "confidence": 0.9, '
+                    '"reasoning": "ok", "sample_values": ["a"]}'
+                }
+            }
+        ]
+    }
+    mock_resp = httpx.Response(
+        200,
+        json=llm_response,
+        request=httpx.Request("POST", "http://test"),
+    )
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    return mock_ctx, mock_client
+
+
+class TestModelDefault:
+    """MAG-5: an unset/blank OPENROUTER_MODEL_PRIMARY must fall back to a free slug.
+
+    A regression that swaps DEFAULT_MODEL back to a paid model — or that stops
+    honouring the env override — would silently bill OpenRouter credits on the
+    demo deploy (render.yaml sets the free slug, but nothing guards code drift).
+    """
+
+    def test_default_model_is_a_free_slug(self) -> None:
+        """The hardcoded fallback must be an OpenRouter ``:free`` variant."""
+        assert DEFAULT_MODEL.endswith(":free"), (
+            f"DEFAULT_MODEL {DEFAULT_MODEL!r} is not a free-tier slug — an unset "
+            "OPENROUTER_MODEL_PRIMARY would bill paid credits (MAG-5)."
+        )
+        # Pin the exact portfolio-approved slug so a paid swap is caught explicitly.
+        assert DEFAULT_MODEL == "nvidia/nemotron-nano-9b-v2:free"
+
+    @pytest.mark.asyncio
+    async def test_uses_free_default_when_model_env_unset(self) -> None:
+        """With OPENROUTER_MODEL_PRIMARY absent entirely, the request uses the free slug."""
+        mock_ctx, mock_client = _mock_llm_client()
+        # clear=True wipes the environment for the block, guaranteeing the var is unset.
+        with (
+            patch("magpie.healer.selector_fixer.httpx.AsyncClient", return_value=mock_ctx),
+            patch.dict("os.environ", {"OPENROUTER_API_KEY": "fake-key"}, clear=True),
+        ):
+            await _call_llm(
+                field_name="title",
+                old_selector="span.old::text",
+                html="<html></html>",
+                old_samples=[],
+            )
+
+        sent_model = mock_client.post.call_args.kwargs["json"]["model"]
+        assert sent_model == DEFAULT_MODEL
+        assert sent_model.endswith(":free")
+
+    @pytest.mark.asyncio
+    async def test_uses_free_default_when_model_env_blank(self) -> None:
+        """A blank/whitespace OPENROUTER_MODEL_PRIMARY also falls back to the free slug."""
+        mock_ctx, mock_client = _mock_llm_client()
+        with (
+            patch("magpie.healer.selector_fixer.httpx.AsyncClient", return_value=mock_ctx),
+            patch.dict(
+                "os.environ",
+                {"OPENROUTER_API_KEY": "fake-key", "OPENROUTER_MODEL_PRIMARY": "   "},
+                clear=True,
+            ),
+        ):
+            await _call_llm(
+                field_name="title",
+                old_selector="span.old::text",
+                html="<html></html>",
+                old_samples=[],
+            )
+
+        assert mock_client.post.call_args.kwargs["json"]["model"] == DEFAULT_MODEL
+
+    @pytest.mark.asyncio
+    async def test_explicit_model_env_overrides_default(self) -> None:
+        """An explicit OPENROUTER_MODEL_PRIMARY is honoured over the default."""
+        mock_ctx, mock_client = _mock_llm_client()
+        with (
+            patch("magpie.healer.selector_fixer.httpx.AsyncClient", return_value=mock_ctx),
+            patch.dict(
+                "os.environ",
+                {
+                    "OPENROUTER_API_KEY": "fake-key",
+                    "OPENROUTER_MODEL_PRIMARY": "anthropic/claude-3-haiku",
+                },
+                clear=True,
+            ),
+        ):
+            await _call_llm(
+                field_name="title",
+                old_selector="span.old::text",
+                html="<html></html>",
+                old_samples=[],
+            )
+
+        assert mock_client.post.call_args.kwargs["json"]["model"] == "anthropic/claude-3-haiku"
 
 
 class TestCallLlm:

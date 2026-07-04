@@ -117,6 +117,45 @@ class TestScrapeSourceTask:
         queued_tasks = {job["task_name"] for job in queued}
         assert "magpie.heal_source" in queued_tasks
 
+    async def test_sync_scrape_once_enqueues_heal_on_underflow(
+        self, session_factory, monkeypatch, in_memory_app
+    ) -> None:
+        """The sync service path (used by /scrape, CLI, batch) also heals on underflow (MAG-1)."""
+        from magpie.services.scrape_service import scrape_once
+
+        cfg = SourceConfig(
+            name="sync-underflow",
+            url="https://example.com",  # type: ignore[arg-type]
+            schedule="0 */6 * * *",
+            item={  # type: ignore[arg-type]
+                "container": "tr.row",
+                "fields": [
+                    {"name": "id", "selector": "::attr(id)"},
+                    {"name": "title", "selector": "a::text"},
+                ],
+                "dedupe_key": "id",
+            },
+            health={"min_items": 5},
+        )
+        async with session_factory() as session:
+            await SourcesRepository(session).create(
+                config=cfg,
+                origin=SourceOrigin.api,
+                yaml_text=yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False),
+            )
+            await session.commit()
+
+        with patch(
+            "magpie.services.scrape_service._execute_static",
+            new=AsyncMock(return_value=_items(1)),
+        ):
+            await scrape_once(
+                source="sync-underflow", max_items=10, session_factory=session_factory
+            )
+
+        queued_tasks = {job["task_name"] for job in in_memory_app.connector.jobs.values()}
+        assert "magpie.heal_source" in queued_tasks
+
 
 class TestRetryConfiguration:
     def test_scrape_task_has_retry_strategy(self) -> None:

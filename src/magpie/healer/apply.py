@@ -21,6 +21,7 @@ import yaml
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from magpie.config.schema import SelectorType, SourceConfig
+from magpie.core.safe_fetch import safe_get_async
 from magpie.healer.github_pr import create_heal_pr
 from magpie.healer.selector_fixer import fix_selector
 from magpie.healer.validator import validate_selector
@@ -47,12 +48,14 @@ async def _fetch_html(config: SourceConfig) -> str:
 
         return await PlaywrightRunner(config).fetch_html()
 
+    # follow_redirects=False + safe_get_async: redirect hosts are re-validated
+    # against the SSRF allowlist so a 302 to an internal address isn't followed.
     async with httpx.AsyncClient(
         timeout=30.0,
-        follow_redirects=True,
+        follow_redirects=False,
         headers={"User-Agent": USER_AGENT},
     ) as client:
-        resp = await client.get(str(config.url))
+        resp = await safe_get_async(client, str(config.url))
         resp.raise_for_status()
         return resp.text
 
@@ -237,6 +240,11 @@ async def _heal_target(
     new_config: SourceConfig | None = None
 
     if origin is SourceOrigin.file:
+        # File-origin sources are healed via PR: commit the patched YAML onto the
+        # heal branch and open a PR. The committed file is the real config file
+        # under configs/, so the branch actually differs from base and the PR is
+        # openable (previously the PR call had no branch/commit and 422'd).
+        patched = _patched_yaml(original_config=config, target=target, new_selector=new_selector)
         pr_url = await create_heal_pr(
             source_name=source_name,
             field_name=target,
@@ -245,6 +253,8 @@ async def _heal_target(
             confidence=float(proposal.get("confidence", 0.0)),
             reasoning=str(proposal.get("reasoning", "")),
             sample_values=list(proposal.get("sample_values", [])),
+            file_path=f"configs/{source_name}.yaml",
+            new_content=patched,
         )
     else:
         patched = _patched_yaml(original_config=config, target=target, new_selector=new_selector)

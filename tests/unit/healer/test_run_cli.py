@@ -56,3 +56,41 @@ class TestHealCli:
         monkeypatch.setattr(heal_cli, "get_session_factory", lambda: session_factory)
         rc = heal_cli.main([])
         assert rc == 0
+
+    def test_main_heals_underflowed_ok_run(self, session_factory, monkeypatch) -> None:
+        """A latest run marked ``ok`` but below min_items is picked up for healing (MAG-1)."""
+        import asyncio
+
+        underflow_yaml = SAMPLE_YAML.replace("heal-cli-src", "underflow-src")
+
+        async def _seed_underflow() -> None:
+            cfg = SourceConfig(**yaml.safe_load(underflow_yaml))
+            # Bump min_items so a 1-item ok run counts as underflow.
+            cfg = cfg.model_copy(update={"health": cfg.health.model_copy(update={"min_items": 5})})
+            async with session_factory() as session:
+                repo = SourcesRepository(session)
+                src = await repo.create(
+                    config=cfg,
+                    origin=SourceOrigin.api,
+                    yaml_text=yaml.safe_dump(cfg.model_dump(mode="json")),
+                )
+                run_repo = PgRunRepository(session)
+                run = await run_repo.create_queued(source_id=src.id, source_name=src.name)
+                await run_repo.mark_ok(
+                    run.id, item_count=1, items_new=1, items_updated=0, items_removed=0
+                )
+                await session.commit()
+
+        asyncio.run(_seed_underflow())
+        monkeypatch.setattr(heal_cli, "get_session_factory", lambda: session_factory)
+
+        healed_sources: list[str] = []
+
+        async def _fake_heal(*, source, run_id, session_factory):  # type: ignore[no-untyped-def]
+            healed_sources.append(source)
+            return {"source": source, "origin": "api", "healed": []}
+
+        with patch("magpie.healer.run.heal_source", new=AsyncMock(side_effect=_fake_heal)):
+            rc = heal_cli.main([])
+        assert rc == 0
+        assert healed_sources == ["underflow-src"]

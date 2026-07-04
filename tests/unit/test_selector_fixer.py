@@ -107,10 +107,13 @@ class TestSelectorFixer:
                 "sample_values": [],
             }
 
-        with patch(
-            "magpie.healer.selector_fixer._call_llm",
-            new_callable=AsyncMock,
-            side_effect=flaky_llm,
+        with (
+            patch(
+                "magpie.healer.selector_fixer._call_llm",
+                new_callable=AsyncMock,
+                side_effect=flaky_llm,
+            ),
+            patch("magpie.healer.selector_fixer.asyncio.sleep", new_callable=AsyncMock) as sleep,
         ):
             html = (FIXTURES / "hackernews-v2-broken.html").read_text()
             result = await fix_selector(
@@ -121,17 +124,88 @@ class TestSelectorFixer:
             )
             assert result is not None
             assert call_count == 3
+            # Two failures before the success -> two backoff sleeps.
+            assert sleep.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_html_truncated_to_20k(self) -> None:
-        large_html = "<html>" + "x" * 25000 + "</html>"
+    async def test_retry_uses_exponential_backoff(self) -> None:
+        """All-failing attempts sleep with growing delays before re-raising (spec 03)."""
+
+        async def always_fails(*args: object, **kwargs: object) -> dict:
+            raise ValueError("boom")
+
+        with (
+            patch(
+                "magpie.healer.selector_fixer._call_llm",
+                new_callable=AsyncMock,
+                side_effect=always_fails,
+            ),
+            patch("magpie.healer.selector_fixer.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            pytest.raises(ValueError),
+        ):
+            await fix_selector(
+                field_name="title",
+                old_selector="div::text",
+                html="<html></html>",
+                old_samples=[],
+            )
+        delays = [call.args[0] for call in sleep.await_args_list]
+        # MAX_RETRIES=3 -> two inter-attempt sleeps, doubling each time.
+        assert delays == [2.0, 4.0]
+
+    @pytest.mark.asyncio
+    async def test_retry_honours_retry_after_on_429(self) -> None:
+        """A 429 with a Retry-After header waits exactly that many seconds."""
+        import httpx
+
+        resp = httpx.Response(
+            429, headers={"retry-after": "7"}, request=httpx.Request("POST", "http://x")
+        )
+        err = httpx.HTTPStatusError("rate limited", request=resp.request, response=resp)
+
+        async def rate_limited(*args: object, **kwargs: object) -> dict:
+            raise err
+
+        with (
+            patch(
+                "magpie.healer.selector_fixer._call_llm",
+                new_callable=AsyncMock,
+                side_effect=rate_limited,
+            ),
+            patch("magpie.healer.selector_fixer.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            pytest.raises(httpx.HTTPStatusError),
+        ):
+            await fix_selector(
+                field_name="title",
+                old_selector="div::text",
+                html="<html></html>",
+                old_samples=[],
+            )
+        delays = [call.args[0] for call in sleep.await_args_list]
+        assert delays == [7.0, 7.0]
+
+    @pytest.mark.asyncio
+    async def test_html_stripped_and_truncated(self) -> None:
+        """Scripts/styles are stripped and the payload is capped before the LLM sees it."""
+        from magpie.healer.selector_fixer import MAX_HTML_LENGTH
+
+        large_html = (
+            "<html><head><style>"
+            + "z" * 30000
+            + "</style><script>"
+            + "q" * 30000
+            + "</script></head><body>"
+            + "<div class='item'>keep me</div>"
+            + "x" * 60000
+            + "</body></html>"
+        )
         captured_html = None
 
         async def capture_llm(*, html: str, **kwargs: object) -> dict:
             nonlocal captured_html
             captured_html = html
             return {
-                "selector": "div",
+                "selector": "div.item",
                 "confidence": 0.5,
                 "reasoning": "test",
                 "sample_values": [],
@@ -144,12 +218,16 @@ class TestSelectorFixer:
         ):
             await fix_selector(
                 field_name="title",
-                old_selector="div::text",
+                old_selector="div.item::text",
                 html=large_html,
                 old_samples=[],
             )
-            assert captured_html is not None
-            assert len(captured_html) <= 20000
+        assert captured_html is not None
+        assert len(captured_html) <= MAX_HTML_LENGTH
+        # Script/style noise removed; the windowed region keeps the item container.
+        assert "z" * 30000 not in captured_html
+        assert "q" * 30000 not in captured_html
+        assert "keep me" in captured_html
 
 
 class TestGitHubPR:
@@ -172,6 +250,8 @@ class TestGitHubPR:
                 confidence=0.9,
                 reasoning="Class name changed",
                 sample_values=["Article 1"],
+                file_path="configs/hackernews.yaml",
+                new_content="name: hackernews\n",
             )
             assert pr_url is not None
             assert "pull" in pr_url
@@ -197,5 +277,7 @@ class TestGitHubPR:
                 confidence=0.85,
                 reasoning="Updated",
                 sample_values=[],
+                file_path="configs/hackernews.yaml",
+                new_content="name: hackernews\n",
             )
             assert pr_url is not None
