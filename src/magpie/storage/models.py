@@ -126,6 +126,16 @@ class Item(Base):
     __table_args__ = (
         UniqueConstraint("source_id", "dedupe_key", name="uq_items_source_dedupe"),
         Index("ix_items_source_removed", "source_id", "removed"),
+        # Serves the hot viewer/poll ORDER BY last_seen_at DESC LIMIT queries
+        # (list_for_source / list_in_window) from the index instead of a filesort
+        # over all matching rows (MAG-6). Postgres scans a composite btree
+        # backward for the DESC order, so an ascending index column is fine.
+        Index(
+            "ix_items_source_removed_last_seen",
+            "source_id",
+            "removed",
+            "last_seen_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)

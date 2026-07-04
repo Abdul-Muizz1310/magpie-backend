@@ -53,7 +53,15 @@ def get_engine() -> AsyncEngine:
     """Get or create the process-wide async SQLAlchemy engine."""
     global _engine
     if _engine is None:
-        _engine = create_async_engine(_database_url(), echo=False, pool_pre_ping=True)
+        # pool_pre_ping revives connections dropped by Neon/Render idle
+        # suspension; pool_recycle bounds connection age so we don't hand out a
+        # server-closed socket after an idle window (P9).
+        _engine = create_async_engine(
+            _database_url(),
+            echo=False,
+            pool_pre_ping=True,
+            pool_recycle=300,
+        )
     return _engine
 
 

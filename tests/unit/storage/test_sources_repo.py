@@ -50,6 +50,27 @@ class TestSourcesRepository:
         with pytest.raises(DuplicateSourceError):
             await repo.create(config=cfg, origin=SourceOrigin.api, yaml_text=text)
 
+    async def test_create_race_integrity_error_becomes_duplicate(
+        self, db_session, monkeypatch
+    ) -> None:
+        """A TOCTOU race past the pre-check surfaces as DuplicateSourceError, not a raw 500.
+
+        Simulate the race by making ``get_by_name`` report "not found" even
+        though the row already exists, forcing the unique-constraint IntegrityError
+        path on flush.
+        """
+        repo = SourcesRepository(db_session)
+        cfg, text = _config()
+        await repo.create(config=cfg, origin=SourceOrigin.api, yaml_text=text)
+        await db_session.commit()
+
+        async def _pretend_absent(_name: str) -> None:
+            return None
+
+        monkeypatch.setattr(repo, "get_by_name", _pretend_absent)
+        with pytest.raises(DuplicateSourceError):
+            await repo.create(config=cfg, origin=SourceOrigin.api, yaml_text=text)
+
     async def test_list_filters_by_origin(self, db_session) -> None:
         repo = SourcesRepository(db_session)
         cfg_a, text_a = _config("src-a")

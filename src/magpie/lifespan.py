@@ -95,6 +95,12 @@ async def magpie_lifespan(app: FastAPI) -> AsyncIterator[None]:
             await queue_app.close_async()
         except Exception:
             log.exception("Error closing Procrastinate app")
+        try:
+            from magpie.platform.platform_token import aclose_http_client
+
+            await aclose_http_client()
+        except Exception:
+            log.exception("Error closing platform-token HTTP client")
 
 
 __all__ = ["_sync_file_sources_to_db", "magpie_lifespan"]

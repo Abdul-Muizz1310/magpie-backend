@@ -277,7 +277,7 @@ Dockerfile                     # Image with chromium + non-root user + HEALTHCHE
 | **Task queue** | Procrastinate (Postgres broker, async, embedded worker) |
 | **Persistence** | Neon Postgres + async SQLAlchemy + Alembic |
 | **Content hashing** | SHA-256 with NFC normalization |
-| **Scheduling** | GitHub Actions weekly cron (Sunday 00:00 UTC) |
+| **Scheduling** | GitHub Actions hourly dispatch; each source runs on its own `schedule` cron |
 | **Artifact storage** | Cloudflare R2 (future — not yet wired for snapshots) |
 | **Healer LLM** | OpenRouter (configurable model via `OPENROUTER_MODEL_PRIMARY`) |
 | **GitHub PRs** | httpx + GitHub REST API (idempotent per `heal/{source}` branch) |
@@ -352,8 +352,8 @@ uv run pytest --cov=src/magpie --cov-report=term-missing
 | Component | Target |
 |---|---|
 | **Viewer API** | Render free tier at `magpie-backend-izzu.onrender.com` |
-| **Scheduled scrapes** | GitHub Actions cron (every 6 hours) |
-| **Heal-on-failure** | GitHub Actions `workflow_run` trigger |
+| **Scheduled scrapes** | GitHub Actions hourly cron → `magpie due` filters to sources whose per-source `schedule` fires this hour |
+| **Heal-on-failure** | GitHub Actions `workflow_run` trigger (fires on scrape failure, incl. underflow-flagged runs) |
 | **Heal HTML source** | Live re-fetch at heal time (Playwright / httpx); R2 snapshot archiving (`muizz-lab` bucket, `scrape/` prefix) is planned, not yet wired |
 
 ---

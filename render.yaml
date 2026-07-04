@@ -19,8 +19,10 @@ services:
         sync: false
       - key: OPENROUTER_BASE_URL
         value: https://openrouter.ai/api/v1
+      # Explicit free-tier slug so an unset dashboard value never silently
+      # falls back to a paid model (MAG-5). Override in the dashboard if needed.
       - key: OPENROUTER_MODEL_PRIMARY
-        sync: false
+        value: nvidia/nemotron-nano-9b-v2:free
       - key: GITHUB_PAT_SCRAPE_HEALER
         sync: false
       - key: GITHUB_REPO
@@ -29,5 +31,26 @@ services:
         value: "scrape:self-heal"
       - key: APP_ENV
         value: production
+      # Auth posture for the live deployment. DEMO_MODE=false means the
+      # X-Platform-Token middleware enforces bastion-minted tokens whenever a
+      # public key is configured (BASTION_SIGNING_KEY_PUBLIC or
+      # BASTION_PUBLIC_KEY_URL). Leaving it unset now also fails closed in code,
+      # but we set it explicitly so the intent is visible (02 unauth finding).
+      - key: DEMO_MODE
+        value: "false"
+      - key: BASTION_SIGNING_KEY_PUBLIC
+        sync: false
+      # Per-IP rate limit for mutating/scrape/enqueue routes (requests/minute).
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "30"
       - key: FRONTEND_URL
-        value: https://magpie-frontend.vercel.app
+        value: https://magpie-frontend-three.vercel.app
+
+# NOTE (MAG-2): the Procrastinate worker runs embedded in this single free-tier
+# web service (see src/magpie/lifespan.py). Render free web services sleep after
+# ~15 min idle, so the */15 stale-run reaper and any queued heals only progress
+# while the service is awake (an inbound request wakes it and boots the worker
+# before the handler enqueues). The synchronous CLI path (`magpie run`, used by
+# the GitHub Actions scheduler) is the always-available flow and does not depend
+# on the worker. Promote the worker to a dedicated `type: worker` service on a
+# paid always-on plan if guaranteed background drain is required.

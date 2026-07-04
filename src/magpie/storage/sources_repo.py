@@ -16,6 +16,7 @@ from datetime import datetime
 
 import yaml
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from magpie.config.schema import SourceConfig
@@ -167,7 +168,15 @@ class SourcesRepository:
             config_sha=_compute_sha(text),
         )
         self._session.add(source)
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:
+            # The get_by_name pre-check is a TOCTOU race against the unique
+            # ``sources.name`` constraint; a concurrent insert of the same name
+            # surfaces here. Roll back and translate to the same typed error the
+            # router already maps to 409.
+            await self._session.rollback()
+            raise DuplicateSourceError(config.name) from exc
         return source
 
     async def update_config(

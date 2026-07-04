@@ -118,14 +118,26 @@ def test_public_key_fetched_from_url_and_cached(monkeypatch: pytest.MonkeyPatch)
         def json(self) -> dict[str, str]:
             return {"kid": "test", "algorithm": "EdDSA", "publicKey": pub_b64}
 
-    def _fake_get(url: str, timeout: float) -> _Resp:
-        calls["n"] += 1
-        return _Resp()
+    class _FakeAsyncClient:
+        async def get(self, url: str) -> _Resp:
+            calls["n"] += 1
+            return _Resp()
 
-    monkeypatch.setattr(platform_token.httpx, "get", _fake_get)
+    # The key fetch must be async (P10): patch the shared async client.
+    monkeypatch.setattr(platform_token, "_get_http_client", lambda: _FakeAsyncClient())
     client = _make_app(demo_mode=False)
     headers = {"X-Platform-Token": _token(priv_pem)}
     assert client.get("/protected", headers=headers).status_code == 200
     # Second request reuses the cached key (no second fetch).
     assert client.get("/protected", headers=headers).status_code == 200
     assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_load_public_key_pem_is_async(monkeypatch: pytest.MonkeyPatch) -> None:
+    """load_public_key_pem returns a coroutine and resolves the env DER key."""
+    _, pub_b64 = _keypair()
+    monkeypatch.setenv("BASTION_SIGNING_KEY_PUBLIC", pub_b64)
+    pem = await platform_token.load_public_key_pem()
+    assert pem is not None
+    assert pem.startswith("-----BEGIN PUBLIC KEY-----")

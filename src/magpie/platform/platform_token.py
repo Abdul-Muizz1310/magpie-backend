@@ -37,6 +37,25 @@ _PUBLIC_KEY_TTL_S = 3600.0
 # (fetched_at_monotonic, pem) — only used for the BASTION_PUBLIC_KEY_URL path.
 _key_cache: tuple[float, str | None] = (0.0, None)
 
+# Module-level async client reused across requests so the JWKS/key fetch never
+# blocks the event loop (P10 / MAG-7). Lazily created inside the running loop.
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=5.0)
+    return _http_client
+
+
+async def aclose_http_client() -> None:
+    """Dispose the shared async client (graceful shutdown / test seam)."""
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
+
 
 def reset_public_key_cache() -> None:
     """Clear the fetched-public-key cache (test seam)."""
@@ -48,8 +67,12 @@ def _wrap_pem(b64_der: str) -> str:
     return f"-----BEGIN PUBLIC KEY-----\n{b64_der.strip()}\n-----END PUBLIC KEY-----\n"
 
 
-def load_public_key_pem() -> str | None:
-    """Resolve bastion's Ed25519 public key as PEM (env first, then cached URL)."""
+async def load_public_key_pem() -> str | None:
+    """Resolve bastion's Ed25519 public key as PEM (env first, then cached URL).
+
+    The URL fetch uses a module-level ``httpx.AsyncClient`` and is awaited so a
+    slow/hanging key server never stalls the single-process event loop.
+    """
     raw = os.environ.get("BASTION_SIGNING_KEY_PUBLIC")
     if raw:
         return _wrap_pem(raw)
@@ -64,7 +87,7 @@ def load_public_key_pem() -> str | None:
     if cached is not None and (now - cached_at) < _PUBLIC_KEY_TTL_S:
         return cached
     try:
-        resp = httpx.get(url, timeout=5.0)
+        resp = await _get_http_client().get(url)
         resp.raise_for_status()
         pem = _wrap_pem(str(resp.json()["publicKey"]))
     except Exception:  # pragma: no cover - network failure path
@@ -97,7 +120,7 @@ def install_platform_token(app: FastAPI, *, demo_mode: bool) -> None:
     async def _platform_token_middleware(request: Request, call_next: _Handler) -> Response:
         if demo_mode or _is_exempt(request.url.path):
             return await call_next(request)
-        pem = load_public_key_pem()
+        pem = await load_public_key_pem()
         if pem is None:
             # Enforcement is opt-in; with no key configured we fail open.
             return await call_next(request)

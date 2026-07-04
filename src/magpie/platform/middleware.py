@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 _Handler = Callable[[Request], Awaitable[Response]]
 
 _PROD_ORIGINS = [
-    "https://magpie-frontend.vercel.app",
+    "https://magpie-frontend-three.vercel.app",
     "https://bastion-six.vercel.app",
 ]
 
