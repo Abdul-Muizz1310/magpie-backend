@@ -14,7 +14,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from magpie.main import app
-from magpie.platform.health import PLACEHOLDER_SHAS, UNKNOWN_SHA, commit_sha
+from magpie.platform.health import (
+    _SHA_ENV_VARS,
+    PLACEHOLDER_SHAS,
+    UNKNOWN_SHA,
+    commit_sha,
+)
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
 RENDER_SHA = "fedcba9876543210fedcba9876543210fedcba98"
@@ -22,8 +27,17 @@ RENDER_SHA = "fedcba9876543210fedcba9876543210fedcba98"
 
 @pytest.fixture(autouse=True)
 def _clear_sha_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("COMMIT_SHA", raising=False)
-    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    """Start every test from an environment with no SHA source set.
+
+    Derived from ``_SHA_ENV_VARS`` rather than an explicit list: this fixture
+    previously cleared only COMMIT_SHA and RENDER_GIT_COMMIT while the resolver
+    also consults GITHUB_SHA, which GitHub Actions always sets. The
+    "nothing configured" cases therefore passed locally and failed in CI,
+    resolving to the runner's commit instead of "unknown". Iterating the
+    resolver's own tuple means a new source cannot silently reintroduce that.
+    """
+    for name in _SHA_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
 
 
 class TestCommitShaResolution:
