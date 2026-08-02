@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from tests.integration.docker_gate import docker_skip_reason
-from tests.test_smoke import _get, require_smoke_target
+from tests.test_smoke import SMOKE_URL_ENV, _get, require_smoke_target
 
 
 class TestDockerGate:
@@ -68,7 +68,19 @@ class TestSmokeGateFailurePaths:
     def test_a_typoed_url_is_never_mistaken_for_an_unconfigured_tier(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("MAGPIE_SMOKE_URL", "https:/magpie.example.test")
+        """Also pins the env-var name CI wires up.
+
+        The literal below is what ``.github/workflows/ci.yml``'s ``smoke`` job
+        passes as ``${{ vars.SMOKE_BASE_URL }}``. If ``SMOKE_URL_ENV`` were
+        renamed without updating the workflow, this ``setenv`` would land on a
+        variable nothing reads: ``require_smoke_target()`` would see an unset
+        tier and *skip*, and the final assertion catches exactly that. The
+        equality check makes the coupling explicit rather than incidental.
+        """
+        assert SMOKE_URL_ENV == "SMOKE_BASE_URL", (
+            "the smoke tier's env var is wired into ci.yml as vars.SMOKE_BASE_URL"
+        )
+        monkeypatch.setenv("SMOKE_BASE_URL", "https:/magpie.example.test")
         with pytest.raises(Exception) as excinfo:
             require_smoke_target()
         assert not isinstance(excinfo.value, pytest.skip.Exception)

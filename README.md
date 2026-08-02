@@ -299,7 +299,7 @@ Dockerfile                     # Image with chromium + non-root user + HEALTHCHE
 | **Healer LLM** | OpenRouter (configurable model via `OPENROUTER_MODEL_PRIMARY`) |
 | **GitHub PRs** | httpx + GitHub REST API (idempotent per `heal/{source}` branch) |
 | **API framework** | FastAPI |
-| **CI** | GitHub Actions (lint + test with PG service + Docker build), uv cached |
+| **CI** | GitHub Actions (lint + test with PG service + Docker build + push-gated post-deploy smoke), uv cached |
 
 ---
 
@@ -340,7 +340,7 @@ Three tiers, each with an explicit dependency ([spec 08](docs/specs/08-test-tier
 |---|---|---|
 | Fast | *(none)* | nothing — pure Python, SQLite, local fixture servers |
 | Postgres integration | `slow` | a Docker daemon; Testcontainers starts `postgres:16-alpine` |
-| Live smoke | `smoke` | `MAGPIE_SMOKE_URL` pointing at a deployment |
+| Live smoke | `smoke` | `SMOKE_BASE_URL` pointing at a deployment |
 
 ```bash
 uv run pytest                             # every tier its dependency allows — what CI runs
@@ -348,10 +348,17 @@ uv run pytest -m "not slow"               # fast tier only: no Docker, no networ
 uv run pytest -m slow                     # Postgres tier only (needs Docker)
 uv run pytest --cov=src --cov-report=term-missing
 
-# Live smoke: skipped entirely when MAGPIE_SMOKE_URL is unset, so a sleeping
+# Live smoke: skipped entirely when SMOKE_BASE_URL is unset, so a sleeping
 # free-tier deploy can never turn CI red for reasons unrelated to the commit.
-MAGPIE_SMOKE_URL=https://magpie-backend-t4bb.onrender.com uv run pytest -m smoke
+# The value is a bare origin — no trailing slash, no path; the tests append
+# /health and /version themselves.
+SMOKE_BASE_URL=https://magpie-backend-t4bb.onrender.com uv run pytest -m smoke
 ```
+
+In CI this tier runs only in the push-gated `smoke` job, which reads the
+`SMOKE_BASE_URL` repository *variable* (not a secret — it is a public URL, and
+secrets are unavailable to fork PRs). The main `test` job never receives it, so
+the smoke tier stays skipped there.
 
 The Postgres tier is not decoration: SQLite does not enforce foreign keys by
 default, treats `SELECT … FOR UPDATE` as a no-op, and degrades native `ENUM` types
@@ -398,7 +405,7 @@ README unnoticed.
 | **Healer coverage** | container heal + field heal, file-origin PR + api-origin db-patch |
 | **Postgres tier** | Testcontainers `postgres:16-alpine` — Alembic head, FK cascades, `FOR UPDATE` serialisation, native enum domains |
 | **Heal-rate eval** | 5/6 breakage archetypes repaired = 83.33% (`uv run magpie-eval`) |
-| **CI pipeline** | lint + test (against real Postgres service) + Docker build, which asserts the image baked a real `COMMIT_SHA` |
+| **CI pipeline** | lint + test (against real Postgres service) + Docker build, which asserts the image baked a real `COMMIT_SHA`, then a push-only `smoke` job that probes the live deploy via the `SMOKE_BASE_URL` variable (inert when unset) |
 
 ---
 

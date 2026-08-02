@@ -83,5 +83,5 @@ addopts = "--cov=src --cov-report=term-missing --cov-fail-under=80"
 # filter and an unregistered-marker typo is an error, not a silent no-op.
 markers = [
     "slow: needs a Docker daemon — Testcontainers starts a real postgres:16-alpine",
-    "smoke: hits a deployed URL; skipped unless MAGPIE_SMOKE_URL is set",
+    "smoke: hits a deployed URL; skipped unless SMOKE_BASE_URL is set",
 ]

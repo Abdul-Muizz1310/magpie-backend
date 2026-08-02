@@ -238,7 +238,7 @@ Three test tiers, each with an explicit dependency — see
 |---|---|---|
 | Fast | *(none)* | nothing — pure Python, SQLite, local fixture servers |
 | Postgres integration | `slow` | a Docker daemon (Testcontainers runs `postgres:16-alpine`) |
-| Live smoke | `smoke` | `MAGPIE_SMOKE_URL` pointing at a deployment |
+| Live smoke | `smoke` | `SMOKE_BASE_URL` pointing at a deployment (CI's push-gated `smoke` job supplies it from `vars.SMOKE_BASE_URL`) |
 
 The Postgres tier exists because SQLite silently disagrees with Postgres on the
 things this schema leans on: it does not enforce foreign keys by default, it

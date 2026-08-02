@@ -9,10 +9,18 @@ dependency and a documented way to run or skip it:
 |---|---|---|---|
 | Fast | *(none)* | none — pure Python + SQLite + local fixture servers | `uv run pytest -m "not slow"` |
 | Postgres integration | `slow` | a Docker daemon (Testcontainers starts `postgres:16-alpine`) | `uv run pytest -m slow` |
-| Live smoke | `smoke` | a reachable deployment (`MAGPIE_SMOKE_URL`) | `MAGPIE_SMOKE_URL=... uv run pytest -m smoke` |
+| Live smoke | `smoke` | a reachable deployment (`SMOKE_BASE_URL`) | `SMOKE_BASE_URL=... uv run pytest -m smoke` |
 
 `uv run pytest` (no `-m`) runs every tier that its dependency allows and is what
-CI executes.
+CI's `test` job executes. `SMOKE_BASE_URL` is deliberately **not** set for that
+job, so the smoke tier skips there; the live probe runs in CI's separate
+push-gated `smoke` job, which passes `${{ vars.SMOKE_BASE_URL }}` and adds
+`--no-cov` (two tests cannot clear a whole-project coverage gate).
+
+`SMOKE_BASE_URL` is a repository **variable**, not a secret — the value is a
+public URL, and secrets are unavailable to fork pull requests. Its value is a
+bare origin: **no trailing slash and no path**. The tests append `/health` and
+`/version`; a value containing `/health` would be a misconfiguration.
 
 ## Why a real Postgres tier
 
@@ -62,18 +70,27 @@ Postgres on the exact behaviours this schema depends on:
 
 ## Behaviour under test (live smoke tier)
 
-1. `GET {MAGPIE_SMOKE_URL}/health` returns 200 with `status: "ok"`,
+1. `GET {SMOKE_BASE_URL}/health` returns 200 with `status: "ok"`,
    `service: "magpie"`, `db: "ok"`, and a `commit_sha`.
-2. `GET {MAGPIE_SMOKE_URL}/version` returns 200 and its `commit_sha` matches
+2. `GET {SMOKE_BASE_URL}/version` returns 200 and its `commit_sha` matches
    `/health`'s.
 3. A 503 from `/health` fails the smoke test with the body echoed — a suspended
    or DB-less deployment is a real failure *when you asked for a smoke run*.
+4. A cold-booting instance is retried, not failed. Render Free spins idle
+   instances down; the first request afterwards was measured holding the
+   connection open ~70s, and the proxy sometimes answers 502 meanwhile. Each
+   probe therefore allows a 120s per-attempt timeout and 3 attempts, retrying
+   transport errors immediately and retryable 5xx after 5s. Exhausting that
+   budget *is* a failure — the tolerance is bounded, not a blanket `try/except`.
 
 ## Failure / edge cases
 
-- [x] `MAGPIE_SMOKE_URL` unset → every smoke test skips. The portfolio's Render
-      services are billing-suspended and return 503; an unconditional live check
-      would make CI red for a reason unrelated to the commit.
-- [x] Non-`http(s)` `MAGPIE_SMOKE_URL` → fail loudly rather than silently skip,
+- [x] `SMOKE_BASE_URL` unset or blank → every smoke test skips **before any HTTP
+      request is issued**, and the run exits 0. Free-tier deployments sleep,
+      cold-boot and occasionally sit suspended returning 503; an unconditional
+      live check would make CI red for a reason unrelated to the commit.
+- [x] Non-`http(s)` `SMOKE_BASE_URL` → fail loudly rather than silently skip,
       so a typo'd variable isn't mistaken for a passing smoke run.
+- [x] Trailing slash on `SMOKE_BASE_URL` → normalised away, so the probe URL
+      joins with exactly one separator (`.../health`, never `...//health`).
 - [x] Connection error / timeout → fail with the URL in the message.

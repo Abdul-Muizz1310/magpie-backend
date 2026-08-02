@@ -1,30 +1,44 @@
 """Smoke tier — cheap local sanity plus an env-gated probe of a live deployment.
 
 See ``docs/specs/08-test-tiers.md``. The live probe only runs when
-``MAGPIE_SMOKE_URL`` names an http(s) origin::
+``SMOKE_BASE_URL`` names an http(s) origin — a *bare* origin, no trailing slash
+and no path; the tests append ``/health`` and ``/version`` themselves::
 
-    MAGPIE_SMOKE_URL=https://magpie-backend-t4bb.onrender.com uv run pytest -m smoke
+    SMOKE_BASE_URL=https://magpie-backend-t4bb.onrender.com uv run pytest -m smoke
+
+CI passes it as ``${{ vars.SMOKE_BASE_URL }}`` in the push-gated ``smoke`` job
+only, so the main test job keeps skipping this tier.
 
 It is gated rather than unconditional because the deployment is on Render's free
 tier and can be asleep or suspended; a red CI run for that reason says nothing
 about the commit under test. It is *not* gated behind a broad ``try/except`` —
-once you point it at a host, a 503 or a connection error is a failure.
+once you point it at a host, exhausting the retry budget is a failure.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from urllib.parse import urlparse
 
 import httpx
 import pytest
 
-SMOKE_URL_ENV = "MAGPIE_SMOKE_URL"
-SMOKE_TIMEOUT_S = 20.0
+SMOKE_URL_ENV = "SMOKE_BASE_URL"
+
+# Render Free spins an instance down when idle. The first request after that was
+# measured holding the connection open for ~70s while the container cold-booted,
+# so a tight timeout reports "deploy broken" for what is really a cold start.
+SMOKE_TIMEOUT_S = 120.0
+SMOKE_ATTEMPTS = 3
+# Slept only after a retryable 5xx *response* — Render's proxy can answer 502
+# while the container is still coming up. Transport errors retry immediately.
+SMOKE_RETRY_DELAY_S = 5.0
+_RETRY_STATUS = frozenset({502, 503, 504})
 
 
 class SmokeTargetError(RuntimeError):
-    """``MAGPIE_SMOKE_URL`` is set but unusable.
+    """``SMOKE_BASE_URL`` is set but unusable.
 
     A separate outcome from "unset" on purpose: a typo'd variable must not be
     indistinguishable from a deliberately skipped tier.
@@ -110,15 +124,42 @@ class TestSmokeTargetResolution:
             require_smoke_target()
 
 
-# ── Live deployment probe (skipped unless MAGPIE_SMOKE_URL is set) ───────────
+# ── Live deployment probe (skipped unless SMOKE_BASE_URL is set) ─────────────
 
 
 async def _get(base: str, path: str) -> httpx.Response:
+    """GET ``{base}{path}``, tolerating a cold-booting free-tier instance.
+
+    ``base`` is a bare origin and ``path`` starts with ``/``, so the two join
+    with exactly one separator; ``base`` is rstripped anyway so a stray trailing
+    slash cannot produce ``//health``.
+
+    Retries transport errors and 502/503/504 up to :data:`SMOKE_ATTEMPTS` times.
+    What is *not* tolerated is exhausting that budget: a transport error then
+    fails the test with the URL echoed, and a lingering 5xx is handed back to
+    the caller so its own status assertion fails with the body echoed. A
+    suspended or DB-less deployment is a real failure once you asked for a
+    smoke run.
+    """
+    url = f"{base.rstrip('/')}{path}"
+    last_exc: httpx.HTTPError | None = None
+    response: httpx.Response | None = None
+
     async with httpx.AsyncClient(timeout=SMOKE_TIMEOUT_S, follow_redirects=True) as client:
-        try:
-            return await client.get(f"{base}{path}")
-        except httpx.HTTPError as exc:
-            pytest.fail(f"GET {base}{path} could not complete: {exc!r}")
+        for attempt in range(1, SMOKE_ATTEMPTS + 1):
+            if attempt > 1 and response is not None:
+                await asyncio.sleep(SMOKE_RETRY_DELAY_S)
+            try:
+                response = await client.get(url)
+            except httpx.HTTPError as exc:
+                last_exc, response = exc, None
+                continue
+            if response.status_code not in _RETRY_STATUS:
+                return response
+
+    if response is not None:
+        return response
+    pytest.fail(f"GET {url} could not complete: {last_exc!r}")
 
 
 @pytest.mark.smoke
