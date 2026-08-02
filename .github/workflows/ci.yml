@@ -6,7 +6,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - uses: astral-sh/setup-uv@v3
@@ -32,7 +32,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - uses: astral-sh/setup-uv@v3
@@ -54,7 +54,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # --build-arg COMMIT_SHA is required: the Dockerfile defaults the ARG to
       # "unknown" and promotes it to ENV, so an image built without it reports a
       # placeholder from /version forever.
@@ -85,7 +85,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - uses: astral-sh/setup-uv@v3
