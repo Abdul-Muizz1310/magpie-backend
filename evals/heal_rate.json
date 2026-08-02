@@ -1,0 +1,139 @@
+{
+  "total_cases": 6,
+  "healed_cases": 5,
+  "heal_rate_pct": 83.33,
+  "cases": [
+    {
+      "name": "hackernews-field-class-rename",
+      "description": "Title wrapper renamed span.titleline -> span.storylink (title + url die)",
+      "breakage": "fields",
+      "broken_fields": [
+        "title",
+        "url"
+      ],
+      "items_before": 7,
+      "items_when_broken": 5,
+      "items_after_heal": 5,
+      "healed": true,
+      "expect_healable": true,
+      "proposals": [
+        {
+          "target": "title",
+          "old_selector": "span.titleline > a::text",
+          "new_selector": "a::text"
+        },
+        {
+          "target": "url",
+          "old_selector": "span.titleline > a::attr(href)",
+          "new_selector": "a::attr(href)"
+        }
+      ]
+    },
+    {
+      "name": "hackernews-container-class-rename",
+      "description": "Row container renamed tr.athing -> tr.story-row (zero items extracted)",
+      "breakage": "container",
+      "broken_fields": [],
+      "items_before": 7,
+      "items_when_broken": 0,
+      "items_after_heal": 7,
+      "healed": true,
+      "expect_healable": true,
+      "proposals": [
+        {
+          "target": "container",
+          "old_selector": "tr.athing",
+          "new_selector": "tr.story-row"
+        }
+      ]
+    },
+    {
+      "name": "hackernews-container-and-field-drift",
+      "description": "Container and title wrapper both renamed \u2014 needs a two-stage heal",
+      "breakage": "container",
+      "broken_fields": [],
+      "items_before": 7,
+      "items_when_broken": 0,
+      "items_after_heal": 7,
+      "healed": true,
+      "expect_healable": true,
+      "proposals": [
+        {
+          "target": "container",
+          "old_selector": "tr.athing",
+          "new_selector": "tr.story-row"
+        },
+        {
+          "target": "title",
+          "old_selector": "span.titleline > a::text",
+          "new_selector": "a::text"
+        },
+        {
+          "target": "url",
+          "old_selector": "span.titleline > a::attr(href)",
+          "new_selector": "a::attr(href)"
+        }
+      ]
+    },
+    {
+      "name": "fake-shop-attribute-renamed",
+      "description": "href -> data-href and data-id -> data-sku (both attribute-valued fields die)",
+      "breakage": "fields",
+      "broken_fields": [
+        "link",
+        "sku"
+      ],
+      "items_before": 3,
+      "items_when_broken": 3,
+      "items_after_heal": 3,
+      "healed": true,
+      "expect_healable": true,
+      "proposals": [
+        {
+          "target": "link",
+          "old_selector": "a.product-link::attr(href)",
+          "new_selector": "a.product-link::attr(data-href)"
+        },
+        {
+          "target": "sku",
+          "old_selector": "::attr(data-id)",
+          "new_selector": "::attr(data-sku)"
+        }
+      ]
+    },
+    {
+      "name": "fake-shop-element-tag-changed",
+      "description": "Product name element changed tag h3 -> div, class unchanged",
+      "breakage": "fields",
+      "broken_fields": [
+        "name"
+      ],
+      "items_before": 3,
+      "items_when_broken": 3,
+      "items_after_heal": 3,
+      "healed": true,
+      "expect_healable": true,
+      "proposals": [
+        {
+          "target": "name",
+          "old_selector": "h3.product-name::text",
+          "new_selector": "div.product-name::text"
+        }
+      ]
+    },
+    {
+      "name": "hackernews-title-content-removed",
+      "description": "Title text removed from the page entirely. There is nothing left to anchor on, so a value-anchored proposer must decline rather than guess. This case exists so the published rate is a measurement and not a tautology.",
+      "breakage": "fields",
+      "broken_fields": [
+        "title"
+      ],
+      "items_before": 7,
+      "items_when_broken": 7,
+      "items_after_heal": 7,
+      "healed": false,
+      "expect_healable": false,
+      "proposals": []
+    }
+  ]
+}

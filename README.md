@@ -13,7 +13,7 @@
 ![neon](https://img.shields.io/badge/Neon-Postgres-00e599?style=flat-square&logo=postgresql&logoColor=white)
 [![ci](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml)
 ![coverage](https://img.shields.io/badge/coverage-92%25-brightgreen?style=flat-square)
-![tests](https://img.shields.io/badge/tests-326%20passed-brightgreen?style=flat-square)
+![tests](https://img.shields.io/badge/tests-473%20passed-brightgreen?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
 
 ---
@@ -62,7 +62,7 @@ Scrapers break constantly. Selectors rot when sites redesign. The usual fix: som
 - 🧵 Async task queue (Procrastinate) embedded in the FastAPI lifespan; no separate worker service required on Render's free tier.
 - 🔎 FastAPI API — viewer endpoints (`/sources`, `/runs`, `/heals`) + custom-source CRUD (`/api/sources`) + async enqueue (`/api/scrape/{source}/enqueue`).
 - ⏰ GitHub Actions: CI + weekly scrape (Sundays 00:00 UTC) + heal-on-failure.
-- 🧪 270+ tests, mypy strict, ruff clean.
+- 🧪 475 tests, mypy strict, ruff clean.
 - 📦 7 shipped configs: hackernews, arxiv-cs, lobsters, huggingface-papers, github-trending, producthunt-today, wikipedia-current-events.
 
 ---
@@ -150,7 +150,7 @@ flowchart TD
     LLM --> Validate["Validate new selectors"]
     Validate --> PR["GitHub PR<br/>scrape:self-heal"]
     Check -- "no" --> Done([Done])
-    DB --> API["FastAPI Viewer<br/>6 endpoints"]
+    DB --> API["FastAPI Viewer<br/>5 endpoints"]
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full diagram and directory layout.
@@ -163,15 +163,18 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full diagram and direct
 src/magpie/
 ├── main.py                    # FastAPI app — routers + lifespan
 ├── lifespan.py                # File-source sync + embedded Procrastinate worker
-├── cli.py                     # `magpie` CLI (migrate | sync | run | run-all)
+├── cli.py                     # `magpie` CLI (migrate | sync | run | run-all | due)
 ├── factory.py                 # Spider factory — static vs JS dispatch
+├── paths.py                   # Repo/config path resolution
+├── scheduling.py              # Per-source cron evaluation for `magpie due`
 ├── api/
 │   ├── deps.py                # Depends() for session / session_factory
+│   ├── items_view.py          # Item row → API view (relative-URL resolution)
 │   └── routers/
 │       ├── scrape.py          # POST /api/scrape/{source}/once + /batch
-│       ├── jobs.py            # POST /api/scrape/{source}/enqueue, GET /api/runs/{id}
+│       ├── jobs.py            # POST /api/scrape/{source}/enqueue, GET /api/runs/{id}(/items)
 │       ├── sources.py         # CRUD at /api/sources
-│       └── viewer.py          # /sources, /runs, /heals (frontend)
+│       └── viewer.py          # /sources, /sources/{name}(/items), /runs, /heals
 ├── services/
 │   └── scrape_service.py      # Orchestrates scrape → persist → return
 ├── queue/
@@ -183,7 +186,12 @@ src/magpie/
 │   ├── selector_fixer.py      # LLM selector re-derivation
 │   ├── validator.py           # New-selector validation
 │   ├── github_pr.py           # PR creation (httpx + GitHub REST)
-│   └── run.py                 # `magpie-heal` CLI entrypoint
+│   ├── run.py                 # `magpie-heal` CLI entrypoint
+│   └── prompts/fix_selector.md
+├── evals/
+│   ├── heal_rate.py           # Heal-rate eval driver (spec 07)
+│   ├── offline_proposer.py    # Network-free, value-anchored selector re-derivation
+│   └── cli.py                 # `magpie-eval` entrypoint
 ├── storage/
 │   ├── db.py                  # Async SQLAlchemy engine + session factory
 │   ├── models.py              # ORM: Source, Run, Item, Heal
@@ -206,13 +214,19 @@ src/magpie/
 ├── playwright/
 │   └── runner.py              # Playwright JS-rendered spider
 ├── core/
-│   └── hashing.py             # SHA-256 + NFC content hashing
+│   ├── hashing.py             # SHA-256 + NFC content hashing
+│   └── safe_fetch.py          # SSRF-guarded httpx GET (redirect hosts re-validated)
 └── platform/
     ├── health.py              # /health (503 on DB down), /version
+    ├── metrics.py             # Prometheus /metrics instrumentation
     ├── logging.py             # Structured logging
-    └── middleware.py          # CORS, request ID
+    ├── middleware.py          # CORS, request ID
+    ├── platform_token.py      # bastion-minted X-Platform-Token verification
+    └── rate_limit.py          # Per-IP limiter on mutating routes
 
 alembic/                       # Migrations
+configs/                       # Shipped source YAML (one file = one spider)
+evals/                         # Heal-rate case manifest, fixtures, committed baseline
 docker-entrypoint.sh           # alembic upgrade + procrastinate schema --apply
 Dockerfile                     # Image with chromium + non-root user + HEALTHCHECK
 ```
@@ -228,9 +242,11 @@ Dockerfile                     # Image with chromium + non-root user + HEALTHCHE
 | `GET` | `/sources` | List all sources with latest status |
 | `GET` | `/sources/{name}` | Single source details |
 | `GET` | `/runs` | Run history (filterable by source) |
+| `GET` | `/sources/{name}/items` | Latest non-removed items for one source (`limit`, `offset`) |
 | `GET` | `/heals` | Heal history with PR links |
 | `GET` | `/health` | Health check (200 OK, **503 when DB is down**) |
-| `GET` | `/version` | Commit SHA |
+| `GET` | `/version` | Commit SHA — `COMMIT_SHA` build arg, else Render's `RENDER_GIT_COMMIT` |
+| `GET` | `/metrics` | Prometheus exposition (`prometheus-fastapi-instrumentator`, excluded from the OpenAPI schema) |
 
 ### Custom sources (runtime config management)
 
@@ -250,6 +266,7 @@ Dockerfile                     # Image with chromium + non-root user + HEALTHCHE
 | `POST` | `/api/scrape/batch` | Run multiple sources concurrently (sync) |
 | `POST` | `/api/scrape/{source}/enqueue` | Defer to the worker, returns `run_id` |
 | `GET` | `/api/runs/{run_id}` | Poll queued/running/ok/error status |
+| `GET` | `/api/runs/{run_id}/items` | Items touched inside that run's time window |
 
 ---
 
@@ -317,21 +334,71 @@ uv run uvicorn magpie.main:app --reload
 
 ## 🧪 Testing
 
+Three tiers, each with an explicit dependency ([spec 08](docs/specs/08-test-tiers.md)):
+
+| Tier | Marker | Needs |
+|---|---|---|
+| Fast | *(none)* | nothing — pure Python, SQLite, local fixture servers |
+| Postgres integration | `slow` | a Docker daemon; Testcontainers starts `postgres:16-alpine` |
+| Live smoke | `smoke` | `MAGPIE_SMOKE_URL` pointing at a deployment |
+
 ```bash
-uv run pytest                              # full suite
-uv run pytest -m "not slow"               # fast-only (CI)
-uv run pytest --cov=src/magpie --cov-report=term-missing
+uv run pytest                             # every tier its dependency allows — what CI runs
+uv run pytest -m "not slow"               # fast tier only: no Docker, no network
+uv run pytest -m slow                     # Postgres tier only (needs Docker)
+uv run pytest --cov=src --cov-report=term-missing
+
+# Live smoke: skipped entirely when MAGPIE_SMOKE_URL is unset, so a sleeping
+# free-tier deploy can never turn CI red for reasons unrelated to the commit.
+MAGPIE_SMOKE_URL=https://magpie-backend-t4bb.onrender.com uv run pytest -m smoke
 ```
+
+The Postgres tier is not decoration: SQLite does not enforce foreign keys by
+default, treats `SELECT … FOR UPDATE` as a no-op, and degrades native `ENUM` types
+to `VARCHAR` — so `ondelete="CASCADE"`, the concurrency lock in
+`PgItemRepository.persist_items`, and the enum domains are only genuinely covered
+against a real Postgres.
+
+### 🎯 Heal-rate eval
+
+One number, reproducible offline ([spec 07](docs/specs/07-heal-rate-eval.md)):
+
+```console
+$ uv run magpie-eval
+case                                  break      before  broken  healed  outcome
+hackernews-field-class-rename         fields          7       5       5  HEALED
+hackernews-container-class-rename     container       7       0       7  HEALED
+hackernews-container-and-field-drift  container       7       0       7  HEALED
+fake-shop-attribute-renamed           fields          3       3       3  HEALED
+fake-shop-element-tag-changed         fields          3       3       3  HEALED
+hackernews-title-content-removed      fields          7       7       7  missed
+
+heal rate: 5/6 = 83.33%
+```
+
+Each case is a real before/after HTML pair under `evals/`. The heal loop that runs
+is the shipped one — the scraper's extractor, `healer.detector`,
+`healer.validator`, `healer.apply.patched_yaml` — with only the LLM proposal step
+replaced by `evals/offline_proposer.py`, a value-anchored re-derivation that needs
+no network or API credit (so the number is the same on every machine). **It
+therefore measures the loop, not the LLM's accuracy.** The sixth case has its
+title text deleted from the page entirely: with nothing to anchor on the proposer
+must decline rather than guess, which is why the rate is 83.33% and not a
+tautological 100%. The result is committed to `evals/heal_rate.json` and asserted
+by `tests/integration/test_heal_rate_eval.py`, so it cannot drift away from this
+README unnoticed.
 
 | Metric | Value |
 |---|---|
-| **Test count** | 270+ tests |
+| **Test count** | 475 tests |
 | **Type discipline** | mypy strict clean, no `Any` leaking across module boundaries |
 | **Linting** | ruff check + ruff format clean |
 | **Config validation** | 35 tests (XPath, CSS, selector compile-check, cross-field validators) |
 | **Dedup accuracy** | in-memory + Postgres repos both cover new/update/remove/reappear |
 | **Healer coverage** | container heal + field heal, file-origin PR + api-origin db-patch |
-| **CI pipeline** | lint + test (against real Postgres service) + Docker build |
+| **Postgres tier** | Testcontainers `postgres:16-alpine` — Alembic head, FK cascades, `FOR UPDATE` serialisation, native enum domains |
+| **Heal-rate eval** | 5/6 breakage archetypes repaired = 83.33% (`uv run magpie-eval`) |
+| **CI pipeline** | lint + test (against real Postgres service) + Docker build, which asserts the image baked a real `COMMIT_SHA` |
 
 ---
 

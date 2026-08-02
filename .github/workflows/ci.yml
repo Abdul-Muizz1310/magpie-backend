@@ -42,6 +42,9 @@ jobs:
       - run: uv sync --frozen
       - name: Install Playwright chromium
         run: uv run playwright install chromium --with-deps
+      # No -m filter on purpose: runners have a Docker daemon, so this also runs
+      # the `slow` Testcontainers-Postgres tier (docs/specs/08-test-tiers.md).
+      # The `smoke` tier self-skips because MAGPIE_SMOKE_URL is unset here.
       - run: uv run pytest --cov=src --cov-report=term-missing --cov-fail-under=80
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
@@ -50,4 +53,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t magpie-backend:${{ github.sha }} .
+      # --build-arg COMMIT_SHA is required: the Dockerfile defaults the ARG to
+      # "unknown" and promotes it to ENV, so an image built without it reports a
+      # placeholder from /version forever.
+      - run: |
+          docker build \
+            --build-arg COMMIT_SHA=${{ github.sha }} \
+            -t magpie-backend:${{ github.sha }} .
+      - name: Assert the built image reports the real commit SHA
+        run: |
+          got=$(docker run --rm --entrypoint sh magpie-backend:${{ github.sha }} -c 'printf %s "$COMMIT_SHA"')
+          test "$got" = "${{ github.sha }}" || { echo "COMMIT_SHA baked as '$got'"; exit 1; }

@@ -24,8 +24,16 @@ Given a validated `SourceConfig`, produce the correct scraper: a Scrapy spider c
 - Both engines respect `rate_limit.rps`
 - Scrapy spider follows pagination via `pagination.next` selector up to `pagination.max_pages`
 - Playwright runner executes `actions` in order before extracting items
-- Both engines archive raw HTML to R2 before parsing (for healer)
 - Both engines return a list of dicts keyed by field name
+
+### Not shipped (planned)
+
+- **R2 raw-HTML archiving.** Neither engine writes a pre-parse HTML snapshot to
+  Cloudflare R2 today. The healer re-fetches the page live instead
+  (`healer/apply._fetch_html`). The only trace of snapshots in shipped code is the
+  optional `html_snapshot_url` field on `ScrapeResult` / `RunView`, which is
+  always `null`. Archiving remains the planned upgrade so the healer can see the
+  exact HTML the scraper saw rather than a later fetch.
 
 ## Test cases
 

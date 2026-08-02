@@ -60,7 +60,7 @@ async def _fetch_html(config: SourceConfig) -> str:
         return resp.text
 
 
-def _patched_yaml(
+def patched_yaml(
     *,
     original_config: SourceConfig,
     target: str,
@@ -82,7 +82,7 @@ def _patched_yaml(
     return yaml.safe_dump(data, sort_keys=False)
 
 
-def _broken_field_names(*, config: SourceConfig, raw_items: list[dict[str, Any]]) -> list[str]:
+def broken_field_names(*, config: SourceConfig, raw_items: list[dict[str, Any]]) -> list[str]:
     """Return field names whose value is ``None`` across *every* extracted item."""
     if not raw_items:
         return []
@@ -143,7 +143,7 @@ async def heal_source(
             raw_items = _extract_items_from_html(html, config)
 
     # ── Field healing ────────────────────────────────────────────────────
-    for field_name in _broken_field_names(config=config, raw_items=raw_items):
+    for field_name in broken_field_names(config=config, raw_items=raw_items):
         field = next(f for f in config.item.fields if f.name == field_name)
         maybe_config = await _heal_target(
             session_factory=session_factory,
@@ -244,7 +244,7 @@ async def _heal_target(
         # heal branch and open a PR. The committed file is the real config file
         # under configs/, so the branch actually differs from base and the PR is
         # openable (previously the PR call had no branch/commit and 422'd).
-        patched = _patched_yaml(original_config=config, target=target, new_selector=new_selector)
+        patched = patched_yaml(original_config=config, target=target, new_selector=new_selector)
         pr_url = await create_heal_pr(
             source_name=source_name,
             field_name=target,
@@ -257,7 +257,7 @@ async def _heal_target(
             new_content=patched,
         )
     else:
-        patched = _patched_yaml(original_config=config, target=target, new_selector=new_selector)
+        patched = patched_yaml(original_config=config, target=target, new_selector=new_selector)
         new_config = SourceConfig(**yaml.safe_load(patched))
         async with session_factory() as session:
             await SourcesRepository(session).update_config(
@@ -330,4 +330,4 @@ async def _record_heal(
         await session.commit()
 
 
-__all__ = ["heal_source"]
+__all__ = ["broken_field_names", "heal_source", "patched_yaml"]

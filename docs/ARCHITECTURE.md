@@ -25,10 +25,10 @@ flowchart TD
     Validate -- "valid" --> PR["GitHub PR<br/>(scrape:self-heal label)"]
     Validate -- "invalid" --> Log["Log error, skip PR"]
     DB --> API["FastAPI Viewer API"]
-    API --> Sources["GET /sources"]
-    API --> Runs["GET /runs"]
+    API --> Sources["GET /sources<br/>GET /sources/{name}<br/>GET /sources/{name}/items"]
+    API --> Runs["GET /runs<br/>GET /api/runs/{id}<br/>GET /api/runs/{id}/items"]
     API --> Heals["GET /heals"]
-    API --> Health["GET /health"]
+    API --> Health["GET /health · /version<br/>GET /metrics (Prometheus)"]
 ```
 
 ## Self-healing pipeline
@@ -136,29 +136,75 @@ classDiagram
 
 ```
 src/magpie/
-├── config/
-│   ├── schema.py          # Pydantic models: SourceConfig, ItemDef, etc.
-│   ├── loader.py          # YAML string/file → SourceConfig
-│   └── registry.py        # Discover all configs/*.yaml
-├── core/
-│   └── hashing.py         # Deterministic SHA-256 with normalization
-├── factory.py             # Dispatch: render=false → Scrapy, render=true → Playwright
-├── scrapy/
-│   ├── factory.py         # Build Spider class + run_spider() with pagination
-│   └── settings.py        # Default Scrapy settings
-├── playwright/
-│   └── runner.py          # JS-rendered page scraping via Playwright
+├── main.py                    # FastAPI app — routers + lifespan
+├── lifespan.py                # File-source sync + embedded Procrastinate worker
+├── cli.py                     # `magpie` CLI (migrate | sync | run | run-all | due)
+├── factory.py                 # Spider factory — static vs JS dispatch
+├── paths.py                   # Repo/config path resolution
+├── scheduling.py              # Per-source cron evaluation for `magpie due`
+├── api/
+│   ├── deps.py                # Depends() for session / session_factory
+│   ├── items_view.py          # Item row → API view (URL resolution)
+│   └── routers/
+│       ├── scrape.py          # POST /api/scrape/{source}/once + /batch
+│       ├── jobs.py            # POST /api/scrape/{source}/enqueue, GET /api/runs/{id}(/items)
+│       ├── sources.py         # CRUD at /api/sources
+│       └── viewer.py          # /sources, /sources/{name}(/items), /runs, /heals
+├── services/
+│   └── scrape_service.py      # Orchestrates scrape → persist → return
+├── queue/
+│   ├── app.py                 # Procrastinate App (Postgres connector)
+│   └── tasks.py               # scrape_source, heal_source, reap_stale_runs
 ├── healer/
-│   ├── detector.py        # should_heal() threshold check
-│   ├── selector_fixer.py  # LLM call to fix broken selectors
-│   ├── validator.py       # Run proposed selector on re-fetched HTML
-│   ├── github_pr.py       # Create/update heal PRs
+│   ├── apply.py               # Heal orchestrator (container + field level)
+│   ├── detector.py            # should_heal() threshold check
+│   ├── selector_fixer.py      # LLM selector re-derivation (OpenRouter)
+│   ├── validator.py           # New-selector validation
+│   ├── github_pr.py           # PR creation (httpx + GitHub REST)
+│   ├── run.py                 # `magpie-heal` CLI entrypoint
 │   └── prompts/
 │       └── fix_selector.md
+├── evals/
+│   ├── heal_rate.py           # Heal-rate eval driver (spec 07)
+│   ├── offline_proposer.py    # Network-free, value-anchored selector re-derivation
+│   └── cli.py                 # `magpie-eval` entrypoint
 ├── storage/
-│   ├── db.py              # SQLAlchemy async engine
-│   └── repo.py            # ItemRepository with dedupe logic
-└── main.py                # FastAPI viewer API
+│   ├── db.py                  # Async SQLAlchemy engine + session factory
+│   ├── models.py              # ORM: Source, Run, Item, Heal
+│   ├── sources_repo.py        # Source CRUD
+│   ├── items_repo_pg.py       # Item persistence with dedup accounting
+│   ├── runs_repo_pg.py        # Run state transitions + reaper
+│   ├── heals_repo.py          # Heal records
+│   └── repo.py                # In-memory ItemRepository (tests only)
+├── config/
+│   ├── loader.py              # YAML → Pydantic v2 config loader
+│   ├── registry.py            # Config registry (all sources)
+│   └── schema.py              # SourceConfig + selector compile-check
+├── schemas/
+│   ├── scrape.py              # ScrapeOnceRequest / ScrapeResult
+│   ├── jobs.py                # EnqueueResponse / RunView
+│   └── sources.py             # SourceSubmission / SourceDetail
+├── scrapy/
+│   ├── factory.py             # Scrapy spider builder + httpx runner
+│   └── settings.py            # Scrapy settings
+├── playwright/
+│   └── runner.py              # Playwright JS-rendered spider
+├── core/
+│   ├── hashing.py             # SHA-256 + NFC content hashing
+│   └── safe_fetch.py          # SSRF-guarded httpx GET (redirects re-validated)
+└── platform/
+    ├── health.py              # /health (503 on DB down), /version
+    ├── metrics.py             # Prometheus /metrics instrumentation
+    ├── logging.py             # Structured logging
+    ├── middleware.py          # CORS, request ID
+    ├── platform_token.py      # bastion-minted X-Platform-Token verification
+    └── rate_limit.py          # Per-IP limiter on mutating routes
+
+alembic/                       # Migrations
+configs/                       # Shipped source YAML (one file = one spider)
+evals/                         # Heal-rate case manifest, fixtures, committed baseline
+docker-entrypoint.sh           # alembic upgrade + procrastinate schema --apply
+Dockerfile                     # Image with chromium + non-root user + HEALTHCHECK
 ```
 
 ## Data flow
@@ -176,9 +222,35 @@ src/magpie/
 | Decision | Why |
 |---|---|
 | parsel for extraction (not Scrapy internals) | Enables `run_spider()` to work without Twisted reactor, making tests reliable |
-| In-memory `ItemRepository` | Allows unit testing without DB; swap to SQLAlchemy for production |
+| Two item repositories, not one | `storage/items_repo_pg.PgItemRepository` is the production path — async SQLAlchemy against Neon Postgres, and what every router and queue task uses. `storage/repo.ItemRepository` keeps the *same* new/updated/removed/reappeared contract entirely in memory so the dedup rules can be unit-tested without a database. It is test-only; nothing in `api/`, `services/` or `queue/` imports it. |
 | No auto-merge on heal PRs | Audit trail > convenience; broken selectors need human review |
 | File-based LLM prompts | Prompts in `prompts/*.md` with frontmatter, not inline strings |
 | `extra="forbid"` on all Pydantic models | Catches typos in YAML configs at load time |
 | Healer re-fetches HTML live (R2 archive is future) | Keeps the healer dependency-free today; archiving the exact pre-parse snapshot to R2 — so it sees what the scraper saw, not a later fetch — is the planned upgrade |
 | SHA-256 per item (not page) | Detects partial changes; one updated listing doesn't invalidate the whole run |
+
+## Test tiers and the heal-rate eval
+
+Three test tiers, each with an explicit dependency — see
+[specs/08-test-tiers.md](specs/08-test-tiers.md):
+
+| Tier | Marker | Needs |
+|---|---|---|
+| Fast | *(none)* | nothing — pure Python, SQLite, local fixture servers |
+| Postgres integration | `slow` | a Docker daemon (Testcontainers runs `postgres:16-alpine`) |
+| Live smoke | `smoke` | `MAGPIE_SMOKE_URL` pointing at a deployment |
+
+The Postgres tier exists because SQLite silently disagrees with Postgres on the
+things this schema leans on: it does not enforce foreign keys by default, it
+treats `SELECT … FOR UPDATE` as a no-op, and it degrades native `ENUM` types to
+`VARCHAR`. `ondelete="CASCADE"`, the concurrency lock in
+`PgItemRepository.persist_items`, and the enum domains are therefore only really
+tested there.
+
+`src/magpie/evals/` measures how much of the heal loop actually works, without an
+LLM in the path — see [specs/07-heal-rate-eval.md](specs/07-heal-rate-eval.md).
+The proposal step is swapped for a value-anchored re-derivation
+(`evals/offline_proposer.py`); extraction, detection, validation and YAML patching
+are the shipped code. The measured rate is committed to `evals/heal_rate.json` and
+asserted by `tests/integration/test_heal_rate_eval.py`, so it cannot drift away
+from the README unnoticed.

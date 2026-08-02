@@ -45,7 +45,10 @@ Run **one** registered scraper on demand and return its items.
   ```
   - `stable_id` = the content-derived fingerprint produced by the scraper's
     `dedupe_key` field (matches the existing hashing path — no new id scheme).
-  - `html_snapshot_url` = R2 URL if a snapshot was captured, else `null`.
+  - `html_snapshot_url` = **always `null` today.** The field is reserved for the
+    planned Cloudflare R2 pre-parse archive (see spec 01); nothing in the repo
+    writes a snapshot, so no scrape has ever populated it. It stays in the
+    response shape so adding the archive later is not a breaking change.
   - `content_hash` = SHA-256 of NFC-normalised `content_text`.
   - `scraped_at`, `fetched_at` are timezone-aware UTC (Pydantic serialises
     `datetime` as ISO-8601 with offset).

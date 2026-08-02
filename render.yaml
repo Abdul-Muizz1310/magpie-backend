@@ -9,6 +9,10 @@ services:
     envVars:
       - key: DATABASE_URL
         sync: false
+      # R2 is PLANNED, not wired: no code path reads or writes these yet. The
+      # healer re-fetches live HTML instead of reading an archived snapshot, and
+      # `html_snapshot_url` is always null in API responses. Kept provisioned so
+      # enabling the archive later needs no blueprint change.
       - key: R2_ACCOUNT_ID
         sync: false
       - key: R2_ACCESS_KEY_ID
@@ -31,6 +35,15 @@ services:
         value: "scrape:self-heal"
       - key: APP_ENV
         value: production
+      # NOTE (/version commit SHA): Render Blueprints expose no Docker build-arg
+      # field, so the Dockerfile's `ARG COMMIT_SHA=unknown` keeps its default on
+      # Render and the real value has to arrive at runtime. Render injects the
+      # deployed commit as the predefined RENDER_GIT_COMMIT variable, and
+      # `magpie.platform.health.commit_sha()` resolves
+      # COMMIT_SHA -> RENDER_GIT_COMMIT -> GITHUB_SHA while skipping the
+      # "unknown" placeholder — so /version reports the deployed SHA here with no
+      # extra envVars entry. Builders that *can* pass --build-arg (CI, local
+      # `docker build`) bake COMMIT_SHA directly and take precedence.
       # Auth posture for the live deployment. DEMO_MODE=false means the
       # X-Platform-Token middleware enforces bastion-minted tokens whenever a
       # public key is configured (BASTION_SIGNING_KEY_PUBLIC or

@@ -1,0 +1,24 @@
+# Eval-only config for the fake-shop before/after fixture family.
+# Not a shipped source: it points at a fixture host and is never synced into the
+# sources table. It exists so the eval covers attribute-valued fields and a
+# container-relative field (`::attr(data-id)`), which none of configs/*.yaml
+# combine on one page.
+name: fake-shop
+description: Fixture shop listing — attribute-heavy selectors for the heal-rate eval
+url: https://shop.example.test
+render: false
+schedule: "0 0 * * 0"
+rate_limit: { rps: 1 }
+
+item:
+  container: "div.product-card"
+  fields:
+    - { name: name, selector: "h3.product-name::text" }
+    - { name: price, selector: "span.product-price::text" }
+    - { name: link, selector: "a.product-link::attr(href)" }
+    - { name: sku, selector: "::attr(data-id)" }
+  dedupe_key: sku
+
+health:
+  min_items: 3
+  max_staleness: "24h"

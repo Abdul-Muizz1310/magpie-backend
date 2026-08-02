@@ -1,0 +1,63 @@
+# Heal-rate eval cases — see docs/specs/07-heal-rate-eval.md.
+#
+# Every path is relative to the repo root. `before` must extract cleanly; `after`
+# must be detected as broken by the shipped detector (the eval errors out
+# otherwise, so a stale fixture cannot silently score a free heal).
+#
+# `min_items` is the health threshold used for *these fixtures*, which are a few
+# rows each — configs/hackernews.yaml's production `min_items: 20` would flag
+# every fixture as an underflow regardless of selectors.
+#
+# The `after` fixtures under evals/fixtures/ are mechanical transformations of the
+# `before` fixtures; each one carries a comment naming the transformation.
+cases:
+  - name: hackernews-field-class-rename
+    description: Title wrapper renamed span.titleline -> span.storylink (title + url die)
+    config: configs/hackernews.yaml
+    before: fixtures/hackernews-v1.html
+    after: fixtures/hackernews-v2-broken.html
+    min_items: 5
+    expect_healable: true
+
+  - name: hackernews-container-class-rename
+    description: Row container renamed tr.athing -> tr.story-row (zero items extracted)
+    config: configs/hackernews.yaml
+    before: fixtures/hackernews-v1.html
+    after: evals/fixtures/hackernews-container-renamed.html
+    min_items: 5
+    expect_healable: true
+
+  - name: hackernews-container-and-field-drift
+    description: Container and title wrapper both renamed — needs a two-stage heal
+    config: configs/hackernews.yaml
+    before: fixtures/hackernews-v1.html
+    after: evals/fixtures/hackernews-redesigned.html
+    min_items: 5
+    expect_healable: true
+
+  - name: fake-shop-attribute-renamed
+    description: href -> data-href and data-id -> data-sku (both attribute-valued fields die)
+    config: evals/configs/fake-shop.yaml
+    before: fixtures/fake-shop.html
+    after: evals/fixtures/fake-shop-attrs-renamed.html
+    min_items: 3
+    expect_healable: true
+
+  - name: fake-shop-element-tag-changed
+    description: Product name element changed tag h3 -> div, class unchanged
+    config: evals/configs/fake-shop.yaml
+    before: fixtures/fake-shop.html
+    after: evals/fixtures/fake-shop-tag-changed.html
+    min_items: 3
+    expect_healable: true
+
+  - name: hackernews-title-content-removed
+    description: >-
+      Title text removed from the page entirely. There is nothing left to anchor
+      on, so a value-anchored proposer must decline rather than guess. This case
+      exists so the published rate is a measurement and not a tautology.
+    config: configs/hackernews.yaml
+    before: fixtures/hackernews-v1.html
+    after: evals/fixtures/hackernews-titles-empty.html
+    min_items: 5
+    expect_healable: false
