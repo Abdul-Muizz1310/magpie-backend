@@ -39,6 +39,17 @@ jobs:
 
   run:
     needs: discover
+    # ``discover`` returning "[]" is the correct answer for the ~19 hours a day
+    # when no source's declared cron fires. GitHub treats a matrix vector that
+    # expands to [] as a hard error ("Matrix vector 'source' does not contain any
+    # values"), which would mark the whole hourly run red — and wake
+    # heal-on-failure (it triggers on conclusion == 'failure') to run the LLM
+    # healer against sources that never broke. Skip the job instead: a skipped
+    # job leaves the run green. The empty-string arm covers a discover step that
+    # never set the output at all.
+    if: >-
+      needs.discover.outputs.sources != ''
+      && needs.discover.outputs.sources != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
