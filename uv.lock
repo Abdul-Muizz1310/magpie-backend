@@ -931,7 +931,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "ruff", specifier = ">=0.16.0" },
-    { name = "testcontainers", extras = ["postgres"], specifier = ">=4.9" },
+    { name = "testcontainers", extras = ["postgres"], specifier = ">=4.15.0" },
     { name = "types-beautifulsoup4", specifier = ">=4.12.0.20250516" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20260724" },
 ]
