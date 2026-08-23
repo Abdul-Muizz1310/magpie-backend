@@ -40,14 +40,14 @@ build-backend = "uv_build"
 dev = [
     "aiosqlite>=0.22.1",
     "lxml-stubs>=0.5",
-    "mypy>=2.3.0",
+    "mypy>=2.3.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.16.0",
+    "ruff>=0.16.3",
     "testcontainers[postgres]>=4.15.0",
     "types-beautifulsoup4>=4.12.0.20250516",
-    "types-pyyaml>=6.0.12.20260724",
+    "types-pyyaml>=6.0.12.20260815",
 ]
 
 [tool.ruff]
