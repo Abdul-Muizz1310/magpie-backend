@@ -86,16 +86,30 @@ Clock skew (both minters):
 - [x] `iat` 5 s in the future → 200; `iat` 30 s in the future → 401.
 - [x] `exp` 5 s in the past → 200; `exp` 30 s in the past → 401.
 
-## Rate limiting behind the proxy (unchanged)
+## Rate limiting behind the proxy
 
 `src/magpie/platform/rate_limit.py` keys on `request.client.host`. The
-container runs `uvicorn magpie.main:app --host 0.0.0.0 --port 8000` with no
-`--forwarded-allow-ips` and Render sets no `FORWARDED_ALLOW_IPS`, so uvicorn
-trusts `X-Forwarded-For` only from `127.0.0.1`. Behind Render's edge the socket
-peer is the edge proxy, so `request.client.host` is the proxy's address for
-every caller — bastion, the frontend proxy and anyone else share the bucket(s).
-The frontend's forwarded `X-Forwarded-For` does not change that. This spec does
-not change the limiter; see the report on DR-0030 for the options.
+container used to run `uvicorn magpie.main:app --host 0.0.0.0 --port 8000`
+with no `--forwarded-allow-ips`, and Render sets no `FORWARDED_ALLOW_IPS`, so
+uvicorn trusted `X-Forwarded-For` only from `127.0.0.1`. Behind Render's edge
+the socket peer is the edge proxy, so `request.client.host` was the proxy's
+address for every caller: bastion, the frontend proxy and everyone else shared
+the bucket(s).
+
+**2026-10-16 — trust forwarded addresses.** The Dockerfile `CMD` now adds
+`--proxy-headers --forwarded-allow-ips '*'`, exactly as paper-trail-backend's
+container does, so `request.client.host` is the leftmost `X-Forwarded-For`
+entry: the visitor address the frontend proxy forwards. The limiter code is
+unchanged. Forwarded headers are client-supplied, but the token middleware is
+installed after the limiter and so runs first: only a caller holding a valid
+platform token (bastion or the frontend proxy, which sets the header itself)
+reaches the limiter.
+
+- [x] The Dockerfile's exec-form `CMD` carries `--proxy-headers` and
+      `--forwarded-allow-ips *` (`tests/unit/test_ops_baseline.py`).
+- [x] Behind uvicorn's proxy-headers middleware trusting `*`, two visitors with
+      different leftmost `X-Forwarded-For` get separate buckets
+      (`tests/unit/test_rate_limit.py`).
 
 ## Not changed
 

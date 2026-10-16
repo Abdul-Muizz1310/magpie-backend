@@ -8,6 +8,7 @@ stale.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -59,6 +60,30 @@ def test_ci_docker_build_passes_commit_sha_build_arg() -> None:
     text = CI_WORKFLOW.read_text(encoding="utf-8")
     assert "ARG COMMIT_SHA" in DOCKERFILE.read_text(encoding="utf-8")
     assert "--build-arg COMMIT_SHA=" in text, "ci.yml docker build must pass --build-arg COMMIT_SHA"
+
+
+def _container_command() -> list[str]:
+    """The Dockerfile's final exec-form ``CMD``: the argv the entrypoint execs."""
+    text = DOCKERFILE.read_text(encoding="utf-8").replace("\\\n", " ")
+    cmds = re.findall(r"^CMD\s+(\[.*\])\s*$", text, flags=re.MULTILINE)
+    assert cmds, "the Dockerfile must end with an exec-form CMD"
+    argv = json.loads(cmds[-1])
+    assert isinstance(argv, list) and all(isinstance(arg, str) for arg in argv)
+    return argv
+
+
+def test_uvicorn_trusts_forwarded_client_addresses() -> None:
+    """Behind Render's edge the socket peer is the proxy, for every caller.
+
+    uvicorn trusts ``X-Forwarded-For`` only from 127.0.0.1 by default, so without
+    these flags ``request.client.host`` (the rate limiter's key) is Render's edge
+    and the whole internet shares one bucket. Same flags as paper-trail-backend.
+    """
+    argv = _container_command()
+    assert "uvicorn" in argv
+    assert "--proxy-headers" in argv
+    assert "--forwarded-allow-ips" in argv, "uvicorn must be told which proxies to trust"
+    assert argv[argv.index("--forwarded-allow-ips") + 1] == "*"
 
 
 # ── A discovered matrix must be allowed to be empty ──────────────────────────

@@ -52,4 +52,10 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 EXPOSE 8000
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["uv", "run", "uvicorn", "magpie.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers + --forwarded-allow-ips: the container is only reachable
+# through Render's edge proxy, so without these every request's peer address is
+# the proxy and the per-IP rate limiter (platform/rate_limit.py) sees one caller
+# for the whole internet. Same flags as paper-trail-backend.
+CMD ["uv", "run", "uvicorn", "magpie.main:app", \
+     "--host", "0.0.0.0", "--port", "8000", \
+     "--proxy-headers", "--forwarded-allow-ips", "*"]
