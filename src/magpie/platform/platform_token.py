@@ -10,7 +10,8 @@ When demo mode is off it trusts two keys (docs/specs/09-platform-token.md):
   ``role == "frontend"`` (DR-0030: the frontend's server proxies browser calls).
 
 With either key configured it verifies the EdDSA-signed ``X-Platform-Token``
-(``exp`` required and in the future) on every non-exempt route and rejects
+(``exp`` required and in the future, 10 s clock-skew leeway on ``exp`` and
+``iat``) on every non-exempt route and rejects
 invalid or missing tokens with 401. The platform and docs endpoints are always
 exempt. With no key configured the middleware fails open: enforcement is
 opt-in. Token format is ``{sub, role, service, iat, exp}`` EdDSA JWT (see
@@ -49,6 +50,9 @@ _SERVICE_ID = "magpie"
 _FRONTEND_ROLE = "frontend"
 _FRONTEND_KEY_ENV = "MAGPIE_FRONTEND_SIGNING_KEY_PUBLIC"
 _BOM = "\ufeff"
+# Tokens are minted on Vercel/bastion and verified here on Render; tolerate this
+# much clock skew on ``exp`` and ``iat`` (PyJWT rejects an ``iat`` in the future).
+_LEEWAY_S = 10
 
 # (fetched_at_monotonic, pem) — only used for the BASTION_PUBLIC_KEY_URL path.
 _key_cache: tuple[float, str | None] = (0.0, None)
@@ -153,9 +157,15 @@ def _is_exempt(path: str) -> bool:
 
 
 def _decode(token: str, key: str | Ed25519PublicKey) -> dict[str, Any] | None:
-    """EdDSA-verify ``token`` against ``key`` with ``exp`` required and live."""
+    """EdDSA-verify ``token`` against ``key`` with ``exp`` required and live (± leeway)."""
     try:
-        return jwt.decode(token, key, algorithms=["EdDSA"], options={"require": ["exp"]})
+        return jwt.decode(
+            token,
+            key,
+            algorithms=["EdDSA"],
+            options={"require": ["exp"]},
+            leeway=_LEEWAY_S,
+        )
     except Exception:
         # PyJWT raises its own errors for bad tokens, and ValueError/TypeError for
         # some malformed keys and claim values; every one of them is a rejection.

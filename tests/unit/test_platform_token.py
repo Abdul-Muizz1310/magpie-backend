@@ -347,3 +347,44 @@ def test_malformed_frontend_key_alone_fails_open(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv(_FRONTEND_ENV, "not base64 at all!!")
     client = _make_app(demo_mode=False)
     assert _protected(client) == 200
+
+
+# ─── Clock skew between minter and verifier: 10 s leeway ──────────────────────
+
+
+def _token_at(priv_pem: str, *, minter: str, iat_offset_s: int, exp_offset_s: int) -> str:
+    """A bastion- or frontend-shaped token with ``iat``/``exp`` offset from now."""
+    now = int(time.time())
+    claims: dict[str, object] = {"iat": now + iat_offset_s, "exp": now + exp_offset_s}
+    if minter == "frontend":
+        claims |= {"sub": "magpie-frontend", "role": "frontend", "service": "magpie"}
+    else:
+        claims |= {"sub": "bastion", "role": "admin", "service": "magpie"}
+    return jwt.encode(claims, priv_pem, algorithm="EdDSA")
+
+
+# (iat offset, exp offset, expected status)
+_SKEW_CASES = {
+    "iat-5s-ahead": (5, 65, 200),
+    "iat-30s-ahead": (30, 90, 401),
+    "exp-5s-ago": (-65, -5, 200),
+    "exp-30s-ago": (-90, -30, 401),
+}
+
+
+@pytest.mark.parametrize("minter", ["bastion", "frontend"])
+@pytest.mark.parametrize(
+    ("iat_offset_s", "exp_offset_s", "expected"), _SKEW_CASES.values(), ids=_SKEW_CASES.keys()
+)
+def test_clock_skew_within_leeway_tolerated(
+    monkeypatch: pytest.MonkeyPatch,
+    minter: str,
+    iat_offset_s: int,
+    exp_offset_s: int,
+    expected: int,
+) -> None:
+    bastion_priv, frontend_priv = _both_keys(monkeypatch)
+    priv = frontend_priv if minter == "frontend" else bastion_priv
+    client = _make_app(demo_mode=False)
+    token = _token_at(priv, minter=minter, iat_offset_s=iat_offset_s, exp_offset_s=exp_offset_s)
+    assert _protected(client, token) == expected

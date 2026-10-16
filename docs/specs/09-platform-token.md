@@ -18,14 +18,14 @@ scoped to this service with the frontend role.
 |---|---|---|
 | key | `BASTION_SIGNING_KEY_PUBLIC` (base64 SPKI DER) or the cached `BASTION_PUBLIC_KEY_URL` fetch | `MAGPIE_FRONTEND_SIGNING_KEY_PUBLIC` (base64 SPKI DER), env only, no URL fetch |
 | `alg` | `EdDSA` | `EdDSA` |
-| `exp` | required, in the future | required, in the future |
+| `exp` | required, in the future (10 s leeway) | required, in the future (10 s leeway) |
 | claims checked | none beyond `exp` (bastion is trusted for every service) | `service == "magpie"` and `role == "frontend"` |
 
 Frontend tokens look like
 `{"alg":"EdDSA","typ":"JWT","kid":"magpie-frontend-2026-10"}` /
 `{"sub":"magpie-frontend","role":"frontend","service":"magpie","iat":…,"exp":iat+60,"jti":…}`.
-`kid`, `sub`, `jti` are not checked. No leeway is applied to `exp` or `iat`,
-matching the bastion path.
+`kid`, `sub`, `jti` are not checked. Both paths allow a **10 s leeway** on
+`exp` and `iat` (see the 2026-10-16 note below).
 
 ## Behaviour
 
@@ -46,6 +46,13 @@ matching the bastion path.
    on that path is that `exp` is now required. bastion's minter
    (`bastion/src/lib/gateway/jwt.ts`) always sets `exp` to 60 s, so no token it
    issues is affected.
+
+**2026-10-16 — clock skew.** Tokens are minted on Vercel (frontend) or bastion
+and verified on Render, and PyJWT rejects an `iat` in the future, so a minter
+clock even a second ahead of this host's would 401 a fresh token. Both paths
+now decode with `leeway=10`: an `iat` up to 10 s ahead and an `exp` up to 10 s
+past are accepted; beyond that the token is rejected. Against a 60 s lifetime
+this widens the replay window by at most 10 s.
 
 ## Test cases
 
@@ -73,6 +80,11 @@ Failure:
       → one warning naming the variable and not containing the value; bastion
       tokens still accepted; with no bastion key the middleware fails open.
 - [x] The malformed-key warning is logged once, not on every request.
+
+Clock skew (both minters):
+
+- [x] `iat` 5 s in the future → 200; `iat` 30 s in the future → 401.
+- [x] `exp` 5 s in the past → 200; `exp` 30 s in the past → 401.
 
 ## Rate limiting behind the proxy (unchanged)
 
