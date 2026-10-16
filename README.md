@@ -221,7 +221,7 @@ src/magpie/
     ├── metrics.py             # Prometheus /metrics instrumentation
     ├── logging.py             # Structured logging
     ├── middleware.py          # CORS, request ID
-    ├── platform_token.py      # bastion-minted X-Platform-Token verification
+    ├── platform_token.py      # X-Platform-Token verification (bastion + frontend keys)
     └── rate_limit.py          # Per-IP limiter on mutating routes
 
 alembic/                       # Migrations
