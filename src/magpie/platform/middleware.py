@@ -1,4 +1,4 @@
-"""Middleware — X-Request-Id propagation and CORS."""
+"""Middleware — X-Request-Id propagation and CORS (order is set in ``magpie.main``)."""
 
 from __future__ import annotations
 
@@ -34,15 +34,29 @@ def _get_allowed_origins() -> list[str]:
     return origins
 
 
-def install_middleware(app: FastAPI) -> None:
-    """Attach CORS and request-id middleware to ``app``."""
+# Contract v2 (spec 10): the browser may send the platform token and a request id.
+ALLOWED_REQUEST_HEADERS = ["content-type", "x-platform-token", "x-request-id", "authorization"]
+
+
+def install_cors(app: FastAPI) -> None:
+    """Attach CORS. Install it last so it is the outermost middleware.
+
+    Outermost means a browser preflight is answered before the token check (which
+    would 401 it), and a 401/503 from that check still carries
+    ``Access-Control-Allow-Origin`` so the page can read the error.
+    """
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_get_allowed_origins(),
         allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["*"],
+        allow_headers=ALLOWED_REQUEST_HEADERS,
+        expose_headers=["x-request-id"],
     )
+
+
+def install_request_id(app: FastAPI) -> None:
+    """Echo ``X-Request-Id`` (or a fresh UUID) on every response, rejections included."""
 
     @app.middleware("http")
     async def _request_id_middleware(request: Request, call_next: _Handler) -> Response:

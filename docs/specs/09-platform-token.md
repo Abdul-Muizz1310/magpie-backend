@@ -1,5 +1,10 @@
 # Spec 09 — Platform token: bastion's key and the frontend's own key
 
+> **Superseded for verification rules by [spec 10](10-platform-contract-v2.md)** (platform
+> contract v2): tokens now need `aud == "magpie"` and an `iss` that matches the key that signed
+> them, there is no fail-open with no key (503), and `DEMO_MODE` only tolerates a missing token.
+> The history below still explains the frontend key, the clock skew and the forwarded addresses.
+
 ## Goal
 
 `DEMO_MODE=false` with bastion's public key set makes the `X-Platform-Token`

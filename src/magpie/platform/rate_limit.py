@@ -1,4 +1,4 @@
-"""Per-IP rate limiting for mutating / scrape / enqueue routes.
+"""Per-caller rate limiting for mutating / scrape / enqueue routes.
 
 The API triggers real outbound network fetches and paid LLM/GitHub spend, so an
 unauthenticated (demo-mode) or even authenticated caller must not be able to
@@ -11,6 +11,11 @@ routes) are never throttled.
 It intentionally runs regardless of ``DEMO_MODE`` — it's an abuse ceiling, not
 authentication. ``RATE_LIMIT_PER_MINUTE <= 0`` disables it (documented escape
 hatch for trusted single-tenant deploys).
+
+Buckets (contract v2, spec 10): an authenticated request keys on ``"{iss}:{sub}"``
+from its platform token; anything else on the client address, which uvicorn sets
+to the leftmost ``X-Forwarded-For`` entry behind Render. The limiter must run
+inside the token middleware so the principal is known (``magpie.main``).
 """
 
 from __future__ import annotations
@@ -22,6 +27,8 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+
+from magpie.platform.principal import principal_of
 
 _Handler = Callable[[Request], Awaitable[Response]]
 
@@ -40,6 +47,14 @@ def _limit_from_env() -> int:
         return 30
 
 
+def bucket_key(request: Request) -> str:
+    """``"{iss}:{sub}"`` for an authenticated request, else the client address."""
+    principal = principal_of(request)
+    if principal is not None:
+        return principal.rate_limit_key
+    return request.client.host if request.client else "unknown"
+
+
 def install_rate_limit(app: FastAPI, *, limit_per_minute: int | None = None) -> None:
     """Attach the per-IP fixed-window rate limiter to ``app``."""
     limit = _limit_from_env() if limit_per_minute is None else limit_per_minute
@@ -51,17 +66,17 @@ def install_rate_limit(app: FastAPI, *, limit_per_minute: int | None = None) -> 
         if limit <= 0 or request.method in _SAFE_METHODS:
             return await call_next(request)
 
-        client_ip = request.client.host if request.client else "unknown"
+        key = bucket_key(request)
         now = time.monotonic()
 
         async with lock:
             if len(buckets) >= _MAX_BUCKETS:
                 _prune(buckets, now)
-            window_start, count = buckets.get(client_ip, (now, 0))
+            window_start, count = buckets.get(key, (now, 0))
             if now - window_start >= _WINDOW_S:
                 window_start, count = now, 0
             count += 1
-            buckets[client_ip] = (window_start, count)
+            buckets[key] = (window_start, count)
             over_limit = count > limit
             retry_after = int(_WINDOW_S - (now - window_start)) + 1
 
@@ -85,4 +100,4 @@ def _prune(buckets: dict[str, tuple[float, int]], now: float) -> None:
         del buckets[oldest]
 
 
-__all__ = ["install_rate_limit"]
+__all__ = ["bucket_key", "install_rate_limit"]
