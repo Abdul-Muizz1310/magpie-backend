@@ -18,7 +18,7 @@ async def test_health_endpoint() -> None:
     assert body["status"] == "ok"
     assert body["service"] == "magpie"
     assert "commit_sha" in body
-    assert body["commit_sha"] == body["version"]
+    assert body["version"] == _pyproject_version()
 
 
 async def test_version_endpoint() -> None:
@@ -26,9 +26,19 @@ async def test_version_endpoint() -> None:
         resp = await c.get("/version")
     assert resp.status_code == 200
     body = resp.json()
-    assert "version" in body
+    assert body["version"] == _pyproject_version()
     assert "commit_sha" in body
-    assert body["commit_sha"] == body["version"]
+
+
+def _pyproject_version() -> str:
+    """``[project].version`` from pyproject.toml: what ``version`` must report."""
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    version = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
+    assert isinstance(version, str)
+    return version
 
 
 async def test_metrics_endpoint() -> None:

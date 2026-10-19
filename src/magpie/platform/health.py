@@ -9,11 +9,20 @@ invisible to the platform.
 from __future__ import annotations
 
 import os
+from importlib.metadata import version as distribution_version
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 SERVICE_NAME = "magpie"
+
+PACKAGE_VERSION = distribution_version(SERVICE_NAME)
+"""The installed ``magpie`` distribution's version (``[project].version``).
+
+``/health`` and ``/version`` report it as ``version``; the commit SHA is
+``commit_sha``. Read once at import: it cannot change while the process runs, and
+an uninstalled package fails at startup rather than on a health probe.
+"""
 
 UNKNOWN_SHA = "unknown"
 """What ``/version`` reports when no build or platform ever told us a real SHA."""
@@ -65,7 +74,7 @@ def install_health_routes(app: FastAPI) -> None:
             content={
                 "status": "ok" if db_ok else "degraded",
                 "service": SERVICE_NAME,
-                "version": sha,
+                "version": PACKAGE_VERSION,
                 "commit_sha": sha,
                 "db": "ok" if db_ok else "down",
             },
@@ -74,4 +83,6 @@ def install_health_routes(app: FastAPI) -> None:
     @app.get("/version", include_in_schema=False)
     async def _version() -> JSONResponse:
         sha = commit_sha()
-        return JSONResponse({"service": SERVICE_NAME, "version": sha, "commit_sha": sha})
+        return JSONResponse(
+            {"service": SERVICE_NAME, "version": PACKAGE_VERSION, "commit_sha": sha}
+        )

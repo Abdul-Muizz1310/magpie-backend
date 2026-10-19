@@ -72,11 +72,23 @@ Returns heal history with PR links.
 
 ### `GET /health`
 
-Returns `{"status": "ok", "version": "<commit_sha>", "db": "ok"|"down"}`.
+Returns `{"status": "ok"|"degraded", "service": "magpie", "version": "<package semver>",
+"commit_sha": "<sha>", "db": "ok"|"down"}` (503 when the database is down).
 
 ### `GET /version`
 
-Returns the commit SHA baked in at build time.
+Returns `{"service": "magpie", "version": "<package semver>", "commit_sha": "<sha>"}`.
+
+**2026-10-20 — `version` is the package semver.** `version` used to repeat the commit SHA, so
+bastion's dashboard showed `v0123abc…`. It is now the installed distribution's version
+(`importlib.metadata.version("magpie")`, i.e. `[project].version` in `pyproject.toml`), as in the
+other backends; the commit SHA stays in `commit_sha` (resolution order `COMMIT_SHA` →
+`RENDER_GIT_COMMIT` → `GITHUB_SHA`, placeholders skipped).
+
+- [x] `/health` and `/version` report `version` equal to `pyproject.toml`'s `[project].version`, a
+      `MAJOR.MINOR.PATCH` string.
+- [x] With a commit SHA configured, `version` is not the SHA and `commit_sha` is the SHA.
+- [x] `/health` and `/version` agree on both fields.
 
 ## Invariants
 
@@ -98,7 +110,7 @@ Returns the commit SHA baked in at build time.
 - [ ] `GET /runs?source=hackernews&limit=5` returns at most 5 runs
 - [ ] `GET /heals?source=hackernews` returns heal history with PR URLs
 - [ ] `GET /health` returns status ok with db ok when connected
-- [ ] `GET /version` returns a commit SHA string
+- [ ] `GET /version` returns the package semver and the commit SHA
 
 ### Edge cases
 - [ ] `GET /sources` with no sources in DB returns empty list (not error)

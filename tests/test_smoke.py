@@ -183,7 +183,10 @@ async def test_deployed_version_agrees_with_health() -> None:
     )
     body = version.json()
     assert body["service"] == "magpie"
-    assert body["commit_sha"] == body["version"]
+    assert body["version"], "/version reported no version"
 
-    health = await _get(base, "/health")
-    assert health.json()["commit_sha"] == body["commit_sha"]
+    # Agreement, not a fixed shape: the smoke job can run while Render still serves
+    # the previous deploy (spec 08), and both deploys must answer consistently.
+    health = (await _get(base, "/health")).json()
+    assert health["version"] == body["version"]
+    assert health["commit_sha"] == body["commit_sha"]

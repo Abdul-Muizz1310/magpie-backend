@@ -72,8 +72,10 @@ Postgres on the exact behaviours this schema depends on:
 
 1. `GET {SMOKE_BASE_URL}/health` returns 200 with `status: "ok"`,
    `service: "magpie"`, `db: "ok"`, and a `commit_sha`.
-2. `GET {SMOKE_BASE_URL}/version` returns 200 and its `commit_sha` matches
-   `/health`'s.
+2. `GET {SMOKE_BASE_URL}/version` returns 200 and its `version` and `commit_sha`
+   match `/health`'s. (Not "`version == commit_sha`": since 2026-10-20 `version` is
+   the package semver. The smoke job runs while Render may still serve the previous
+   deploy, so it asserts agreement, which holds on both sides of that change.)
 3. A 503 from `/health` fails the smoke test with the body echoed — a suspended
    or DB-less deployment is a real failure *when you asked for a smoke run*.
 4. A cold-booting instance is retried, not failed. Render Free spins idle

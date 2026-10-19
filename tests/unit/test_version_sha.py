@@ -10,6 +10,8 @@ therefore can never fall back to anything, and Render's own
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -23,6 +25,7 @@ from magpie.platform.health import (
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
 RENDER_SHA = "fedcba9876543210fedcba9876543210fedcba98"
+SEMVER = re.compile(r"\d+\.\d+\.\d+")
 
 
 @pytest.fixture(autouse=True)
@@ -85,10 +88,25 @@ class TestVersionEndpointReportsResolvedSha:
         assert resp.status_code == 200
         body = resp.json()
         assert body["commit_sha"] == RENDER_SHA
-        assert body["version"] == RENDER_SHA
+        # ``version`` is the package semver, not the SHA (spec 05, 2026-10-20).
+        assert body["version"] != RENDER_SHA
+        assert SEMVER.fullmatch(body["version"])
 
     async def test_health_uses_resolved_sha(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COMMIT_SHA", SHA)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.get("/health")
-        assert resp.json()["commit_sha"] == SHA
+        body = resp.json()
+        assert body["commit_sha"] == SHA
+        assert body["version"] != SHA
+        assert SEMVER.fullmatch(body["version"])
+
+    async def test_health_and_version_agree(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RENDER_GIT_COMMIT", RENDER_SHA)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            health = (await c.get("/health")).json()
+            version = (await c.get("/version")).json()
+        assert (health["version"], health["commit_sha"]) == (
+            version["version"],
+            version["commit_sha"],
+        )
