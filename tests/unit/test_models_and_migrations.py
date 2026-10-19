@@ -188,3 +188,26 @@ class TestAlembicMigration:
             command.upgrade(cfg, "head")  # second call should be a no-op
         finally:
             os.chdir(cwd)
+
+    def test_in_process_upgrade_leaves_app_loggers_enabled(self, tmp_path, monkeypatch) -> None:
+        """``magpie migrate`` runs Alembic in-process; its ``fileConfig`` must not mute the app.
+
+        ``logging.config.fileConfig`` disables every logger that already exists unless
+        told otherwise, so the healer's ERROR lines (spec 03) went nowhere for the rest
+        of any process that had migrated first — including this test session.
+        """
+        import logging
+
+        healer_log = logging.getLogger("magpie.healer")
+        monkeypatch.setattr(healer_log, "disabled", False)
+        db_file = tmp_path / "alembic_loggers.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_file}")
+        cfg = Config(str(REPO_ROOT / "alembic.ini"))
+        cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+        cwd = os.getcwd()
+        os.chdir(REPO_ROOT)
+        try:
+            command.upgrade(cfg, "head")
+        finally:
+            os.chdir(cwd)
+        assert healer_log.disabled is False

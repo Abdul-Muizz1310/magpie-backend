@@ -16,7 +16,10 @@ from magpie.storage.models import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: ``magpie migrate`` runs this in-process, and the
+    # default would mute every logger the app had already created (the healer's
+    # ERROR lines included) for the rest of the process.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", _database_url())
 
