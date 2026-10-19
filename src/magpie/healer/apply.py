@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from magpie.config.schema import SelectorType, SourceConfig
 from magpie.core.safe_fetch import safe_get_async
 from magpie.healer.github_pr import create_heal_pr
+from magpie.healer.outcome import SOURCE_TARGET, HealedTarget, HealFailure, HealSummary
 from magpie.healer.selector_fixer import fix_selector
 from magpie.healer.validator import validate_selector
 from magpie.scrapy.factory import USER_AGENT, _extract_items_from_html
@@ -98,16 +99,22 @@ async def heal_source(
     source: str,
     run_id: uuid.UUID | None,
     session_factory: async_sessionmaker[AsyncSession],
-) -> dict[str, Any]:
-    """Attempt to heal every broken field on ``source``.
+) -> HealSummary:
+    """Attempt to heal every broken selector on ``source``.
 
-    Returns a summary dict that the caller (queue task or CLI) can log.
+    Returns a :class:`HealSummary` that is either healed or carries the reason it
+    is not (spec 03, 2026-10-20). Every failure is logged at ERROR here.
     """
     async with session_factory() as session:
         repo = SourcesRepository(session)
         row = await repo.get_by_name(source)
         if row is None:
-            return {"source": source, "healed": [], "error": "source not found"}
+            log.error("heal of %s failed: source not found", source)
+            return HealSummary(
+                source=source,
+                origin=None,
+                failures=(HealFailure(target=SOURCE_TARGET, reason="source not found"),),
+            )
         config = await repo.get_config(source)
         origin = row.origin
         source_id = row.id
@@ -116,10 +123,14 @@ async def heal_source(
         html = await _fetch_html(config)
     except Exception as exc:
         log.exception("Heal fetch failed for %s", source)
-        return {"source": source, "healed": [], "error": f"fetch failed: {exc}"}
+        return HealSummary(
+            source=source,
+            origin=origin,
+            failures=(HealFailure(target=SOURCE_TARGET, reason=f"fetch failed: {exc}"),),
+        )
 
     raw_items = _extract_items_from_html(html, config)
-    healed: list[dict[str, Any]] = []
+    outcome = _HealLog()
 
     # ── Container healing ────────────────────────────────────────────────
     if not raw_items:
@@ -134,7 +145,7 @@ async def heal_source(
             old_selector=config.item.container,
             selector_type=config.item.container_type,
             html=html,
-            healed_log=healed,
+            outcome=outcome,
         )
         if maybe_config is not None:
             config = maybe_config
@@ -156,12 +167,38 @@ async def heal_source(
             old_selector=field.selector,
             selector_type=field.selector_type,
             html=html,
-            healed_log=healed,
+            outcome=outcome,
         )
         if maybe_config is not None:
             config = maybe_config
 
-    return {"source": source, "origin": origin.value, "healed": healed}
+    if not outcome.healed and not outcome.failures:
+        # The run underflowed (or errored) but the live page extracts items with
+        # every field populated: nothing here explains it, and nothing was fixed.
+        reason = (
+            f"nothing to heal: the live page yields {len(raw_items)} items and no field "
+            "is empty in all of them"
+        )
+        outcome.fail(source, SOURCE_TARGET, reason)
+
+    return HealSummary(
+        source=source,
+        origin=origin,
+        healed=tuple(outcome.healed),
+        failures=tuple(outcome.failures),
+    )
+
+
+class _HealLog:
+    """Accumulates one heal session's outcomes; every failure is logged at ERROR."""
+
+    def __init__(self) -> None:
+        self.healed: list[HealedTarget] = []
+        self.failures: list[HealFailure] = []
+
+    def fail(self, source_name: str, target: str, reason: str) -> None:
+        log.error("heal of %s.%s failed: %s", source_name, target, reason)
+        self.failures.append(HealFailure(target=target, reason=reason))
 
 
 async def _heal_target(
@@ -176,12 +213,13 @@ async def _heal_target(
     old_selector: str,
     selector_type: SelectorType,
     html: str,
-    healed_log: list[dict[str, Any]],
+    outcome: _HealLog,
 ) -> SourceConfig | None:
     """Heal a single container/field target; returns the new config if applied.
 
-    Records a ``heals`` row on every attempt (even failed ones) so the caller
-    can always trace what the LLM tried.
+    Records a ``heals`` row on every attempt that reached the LLM (even failed
+    ones) so the caller can always trace what the LLM tried, and adds exactly one
+    entry to ``outcome``: healed, or failed with the reason.
     """
     mode = HealMode.pr if origin is SourceOrigin.file else HealMode.db_patch
 
@@ -210,9 +248,13 @@ async def _heal_target(
             pr_url=None,
             applied=False,
         )
+        outcome.fail(source_name, target, f"LLM error: {type(exc).__name__}: {exc}")
         return None
 
     if not proposal or not proposal.get("selector"):
+        reasoning = str(proposal.get("reasoning", "")).strip() if proposal else ""
+        reason = f"no selector proposed: {reasoning}" if reasoning else "no selector proposed"
+        outcome.fail(source_name, target, reason)
         return None
 
     new_selector = str(proposal["selector"])
@@ -232,6 +274,11 @@ async def _heal_target(
             mode=mode,
             pr_url=None,
             applied=False,
+        )
+        outcome.fail(
+            source_name,
+            target,
+            f"selector rejected: {new_selector!r} matches nothing on the live page",
         )
         return None
 
@@ -283,14 +330,24 @@ async def _heal_target(
         pr_url=pr_url,
         applied=applied,
     )
-    healed_log.append(
-        {
-            "target": target,
-            "mode": mode.value,
-            "applied": applied,
-            "pr_url": pr_url,
-            "new_selector": new_selector,
-        }
+    if mode is HealMode.pr and pr_url is None:
+        # The selector validated but no reviewer will ever see it: not healed.
+        # github_pr logs which GitHub step failed and why.
+        outcome.fail(
+            source_name,
+            target,
+            f"PR not opened for validated selector {new_selector!r} (see the github_pr error)",
+        )
+        return None
+
+    outcome.healed.append(
+        HealedTarget(
+            target=target,
+            mode=mode,
+            applied=applied,
+            pr_url=pr_url,
+            new_selector=new_selector,
+        )
     )
     return new_config
 

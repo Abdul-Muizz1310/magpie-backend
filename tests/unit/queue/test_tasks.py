@@ -166,3 +166,70 @@ class TestRetryConfiguration:
         assert strategy is not None, "scrape_source_task must have a retry strategy"
         exceptions = set(getattr(strategy, "retry_exceptions", ()) or ())
         assert httpx.HTTPError in exceptions
+
+
+class TestHealSourceTask:
+    """A failed heal is logged at ERROR and returned, not raised (spec 03, 2026-10-20).
+
+    Raising would let Procrastinate's retry repeat the LLM spend for the same outcome.
+    """
+
+    async def test_failed_heal_is_logged_at_error_and_returned(
+        self, session_factory, monkeypatch, caplog
+    ) -> None:
+        import logging
+
+        from magpie.healer.outcome import HealFailure, HealSummary
+        from magpie.queue.tasks import heal_source_task
+
+        monkeypatch.setattr(tasks_module, "get_session_factory", lambda: session_factory)
+        failed = HealSummary(
+            source="arxiv-cs",
+            origin=SourceOrigin.file,
+            failures=(HealFailure(target="container", reason="LLM error: 404 Not Found"),),
+        )
+        with (
+            patch("magpie.healer.apply.heal_source", new=AsyncMock(return_value=failed)),
+            caplog.at_level(logging.ERROR, logger="magpie.queue"),
+        ):
+            outcome = await heal_source_task(source="arxiv-cs", run_id=None)
+
+        assert outcome["source"] == "arxiv-cs"
+        assert outcome["failures"] == [
+            {"target": "container", "reason": "LLM error: 404 Not Found"}
+        ]
+        errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("arxiv-cs" in m and "404" in m for m in errors), errors
+
+    async def test_successful_heal_logs_no_error(
+        self, session_factory, monkeypatch, caplog
+    ) -> None:
+        import logging
+
+        from magpie.healer.outcome import HealedTarget, HealSummary
+        from magpie.queue.tasks import heal_source_task
+        from magpie.storage.models import HealMode
+
+        monkeypatch.setattr(tasks_module, "get_session_factory", lambda: session_factory)
+        healed = HealSummary(
+            source="api-src",
+            origin=SourceOrigin.api,
+            healed=(
+                HealedTarget(
+                    target="title",
+                    mode=HealMode.db_patch,
+                    applied=True,
+                    pr_url=None,
+                    new_selector="h2::text",
+                ),
+            ),
+        )
+        with (
+            patch("magpie.healer.apply.heal_source", new=AsyncMock(return_value=healed)),
+            caplog.at_level(logging.ERROR, logger="magpie.queue"),
+        ):
+            outcome = await heal_source_task(source="api-src", run_id=None)
+
+        assert outcome["healed"][0]["mode"] == "db_patch"
+        assert outcome["failures"] == []
+        assert not [r for r in caplog.records if r.levelno == logging.ERROR]

@@ -41,3 +41,13 @@ Three GitHub Actions workflows:
 - **Adding a new source** is a one-file change — drop a YAML under `configs/`. The `discover` job picks it up on the next workflow run and the matrix expands automatically. If the new config is `render: true`, Playwright chromium is installed for that leg only; no workflow edit required.
 - **Manual trigger**: `gh workflow run nightly-scrape.yml --ref main` passes `--all`, running every source immediately instead of only those whose per-source cron is due this hour.
 - **Healer can re-attempt**: re-running `heal-on-failure` is safe — PRs against the same branch (`heal/{source}`) are idempotent; db-patches are first-wins and won't duplicate records.
+
+## 2026-10-20 — the heal job fails when a heal does not land
+
+- `heal-on-failure.yml` sets `OPENROUTER_MODEL_PRIMARY: google/gemma-4-26b-a4b-it:free` (the same
+  slug as `selector_fixer.DEFAULT_MODEL` and `render.yaml`; a test holds them equal). It reads no
+  repository secret or variable for the model.
+- `python -m magpie.healer.run` exits 1 when any heal target ends without a landed fix (LLM error,
+  no or rejected selector, PR not opened, nothing healable on the live page, fetch failure), so the
+  job is red and the failure is visible in the Actions list. See spec 03, "A heal ends healed or
+  failed".

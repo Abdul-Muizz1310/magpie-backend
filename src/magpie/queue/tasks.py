@@ -9,6 +9,7 @@ trivially testable with ``InMemoryConnector``.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -19,6 +20,8 @@ from magpie.queue.app import queue_app
 from magpie.services.scrape_service import ScrapeExecutionError, scrape_once
 from magpie.storage.db import get_session_factory
 from magpie.storage.runs_repo_pg import PgRunRepository
+
+log = logging.getLogger("magpie.queue.tasks")
 
 # A run that's been in ``running`` for longer than this is almost certainly
 # orphaned by a worker crash or a Render free-tier sleep. The reaper moves
@@ -73,7 +76,11 @@ async def heal_source_task(
     source: str,
     run_id: str | None = None,
 ) -> dict[str, Any]:
-    """Run the healer pipeline for a source whose last run fell short."""
+    """Run the healer pipeline for a source whose last run fell short.
+
+    A heal that does not land is logged at ERROR and returned, not raised: the
+    retry strategy would repeat the LLM spend for the same outcome (spec 03).
+    """
     # Late import so importing ``magpie.queue.tasks`` doesn't pull the healer
     # stack (and httpx->OpenRouter client) in just to register the task.
     from magpie.healer.apply import heal_source
@@ -85,7 +92,9 @@ async def heal_source_task(
         run_id=parsed_run_id,
         session_factory=factory,
     )
-    return outcome
+    if not outcome.succeeded:
+        log.error("heal FAILED for %s: %s", outcome.source, outcome.describe_failures())
+    return outcome.model_dump(mode="json")
 
 
 @queue_app.periodic(cron="*/15 * * * *")

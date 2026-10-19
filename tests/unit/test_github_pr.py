@@ -299,3 +299,83 @@ async def test_head_filter_uses_owner_branch_format() -> None:
         )
     get_pulls = client.call("GET", "/pulls")
     assert get_pulls["params"]["head"] == "octocat:heal/hackernews"
+
+
+class TestGitHubFailuresNameThemselves:
+    """Every failed step logs at ERROR with the step, the status and GitHub's message.
+
+    spec 03 (2026-10-20): "PR not opened" must be diagnosable from the job log
+    alone, and the token must never appear in it.
+    """
+
+    async def test_blob_403_names_the_step_status_and_token_hint(self, caplog) -> None:
+        import logging
+
+        routes = [
+            _Route("GET", "/git/ref/heads/main", _resp(200, {"object": {"sha": "BASE_SHA"}})),
+            _Route("GET", "/git/commits/BASE_SHA", _resp(200, {"tree": {"sha": "BASE_TREE"}})),
+            _Route(
+                "POST",
+                "/git/blobs",
+                _resp(403, {"message": "Resource not accessible by personal access token"}),
+            ),
+        ]
+        client = _RoutingClient(routes)
+        with caplog.at_level(logging.ERROR, logger="magpie.healer.github_pr"):
+            result = await _call_api(client)
+
+        assert result is None
+        errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+        assert errors, "a failed GitHub step must log at ERROR"
+        joined = "\n".join(errors)
+        assert "blob" in joined
+        assert "403" in joined
+        assert "Resource not accessible by personal access token" in joined
+        assert "GITHUB_PAT_SCRAPE_HEALER" in joined
+        assert "fake-token" not in joined
+
+    @pytest.mark.parametrize(
+        ("routes_upto", "step"),
+        [
+            (0, "base ref"),
+            (1, "base commit"),
+            (3, "tree"),
+            (4, "commit"),
+        ],
+    )
+    async def test_each_failed_step_is_named(self, caplog, routes_upto: int, step: str) -> None:
+        import logging
+
+        ok = _git_data_routes()
+        failing = ok[routes_upto]
+        routes = [
+            *ok[:routes_upto],
+            _Route(failing.method, failing.needle, _resp(500, {"message": "upstream broke"})),
+        ]
+        client = _RoutingClient(routes)
+        with caplog.at_level(logging.ERROR, logger="magpie.healer.github_pr"):
+            result = await _call_api(client)
+
+        assert result is None
+        joined = "\n".join(r.getMessage() for r in caplog.records if r.levelno == logging.ERROR)
+        assert step in joined
+        assert "500" in joined
+        assert "upstream broke" in joined
+
+    async def test_pr_create_failure_is_logged(self, caplog) -> None:
+        import logging
+
+        routes = [
+            *_git_data_routes(),
+            _Route("GET", "/pulls", _resp(200, [])),
+            _Route("POST", "/pulls", _resp(422, {"message": "Validation Failed"})),
+        ]
+        client = _RoutingClient(routes)
+        with caplog.at_level(logging.ERROR, logger="magpie.healer.github_pr"):
+            result = await _call_api(client)
+
+        assert result is None
+        joined = "\n".join(r.getMessage() for r in caplog.records if r.levelno == logging.ERROR)
+        assert "pull request" in joined
+        assert "422" in joined
+        assert "Validation Failed" in joined

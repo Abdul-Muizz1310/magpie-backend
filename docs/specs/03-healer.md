@@ -81,3 +81,77 @@ When a scrape returns fewer items than `health.min_items`, automatically attempt
 - [ ] Integration test: broken fixture HTML -> healer runs -> PR body matches the expected text
 - [ ] Prompt lives in `healer/prompts/fix_selector.md`, not inline
 - [ ] No secrets logged at any point
+
+## Default model (2026-10-20)
+
+The code default is the portfolio's primary free model, `google/gemma-4-26b-a4b-it:free`
+(`selector_fixer.DEFAULT_MODEL`). The previous default, `nvidia/nemotron-nano-9b-v2:free`, was
+withdrawn from OpenRouter: every heal call answered 404 and every heal job still reported success.
+`render.yaml` and `heal-on-failure.yml` set `OPENROUTER_MODEL_PRIMARY` to the same slug, and a test
+holds the three equal so a later swap has to change all of them.
+
+## A heal ends healed or failed, never silent (2026-10-20)
+
+On 2026-10-19 the heal job ran against the real `arxiv-cs` underflow, every OpenRouter call answered
+404, and the job finished green with `{'healed': []}`. A heal that does not land must be a failure
+the job reports, not a log line inside a green run.
+
+`heal_source` returns a `HealSummary` (`healer/outcome.py`, frozen): `source`, `origin` (absent when
+the source is unknown), `healed` (one entry per target whose fix landed: the PR opened for a
+file-origin source, the stored config patched for an api-origin one) and `failures` (one entry per
+target that did not, with a reason). A summary with neither is not constructible.
+`succeeded` is true iff `failures` is empty, which means `healed` is not.
+
+| What happened | `target` | `reason` starts with |
+|---|---|---|
+| source unknown | `source` | `source not found` |
+| live re-fetch failed | `source` | `fetch failed:` |
+| the live page extracts items and no field is empty everywhere | `source` | `nothing to heal:` |
+| the LLM call raised after its retries (OpenRouter 404, 429, 5xx, bad JSON) | the target | `LLM error:` |
+| the LLM proposed no selector | the target | `no selector proposed` |
+| the proposed selector extracts nothing from the live page | the target | `selector rejected:` |
+| file-origin: the selector validated but the PR was not opened | the target | `PR not opened` |
+
+Each failure is logged at ERROR where it happens; no secret and no token is logged.
+
+**The heal job** (`python -m magpie.healer.run`, run by `heal-on-failure.yml`) logs every failed
+summary at ERROR and exits **1** when any summary failed. It exits 0 only when every target healed,
+or when there was no target. A manual dispatch (`HEAL_SOURCE_FILTER`) follows the same rule for its
+one source.
+
+**Targets.** A source is a target iff its *latest* run is `error`, or is `ok` with
+`item_count < health.min_items` (and `min_items > 0`). Previously every source with any `error` run
+in its history was a target, so a source that failed once weeks ago was re-healed on every run
+(the 2026-10-19 job healed seven sources for one `arxiv-cs` underflow). With "nothing to heal" now a
+failure, that would have turned every heal job red.
+
+**The queue task** (`heal_source_task`) logs a failed summary at ERROR and returns its JSON dump. It
+does not raise: Procrastinate's retry would repeat the LLM spend for the same outcome.
+
+**GitHub failures name themselves.** Each step of `create_heal_pr` that fails (base ref, base
+commit, blob, tree, commit, ref, PR) logs at ERROR the step, the HTTP status and GitHub's `message`,
+never the token. A 401/403 adds that the `GITHUB_PAT_SCRAPE_HEALER` token lacks access.
+
+### Test cases (loud failure)
+
+Pass:
+- [x] A file-origin heal whose PR opens: `succeeded`, one `healed` entry with the PR URL, no failure.
+- [x] An api-origin container heal: `succeeded`; the stored config is patched.
+- [x] Heal job: every target succeeds → exit 0; no target at all → exit 0 and no heal attempted.
+- [x] Heal job: a source whose latest run is `ok` and at or above `min_items` is not a target, even
+      with an older `error` run.
+- [x] Heal job: a source whose latest run is `error` is a target; one whose latest `ok` run
+      underflowed is a target.
+
+Failure:
+- [x] The LLM raises (OpenRouter 404) → failure `LLM error:` naming the target; ERROR logged.
+- [x] The LLM proposes `null` → failure `no selector proposed`.
+- [x] The proposal extracts nothing → failure `selector rejected:`.
+- [x] File-origin, the PR call returns nothing → failure `PR not opened`; not counted as healed.
+- [x] Live page extracts items with every field populated → failure `nothing to heal:`.
+- [x] Unknown source → failure `source not found`; fetch error → failure `fetch failed:`.
+- [x] A `HealSummary` with neither `healed` nor `failures` cannot be built.
+- [x] Heal job: one target fails and another heals → exit 1, ERROR names the failed source.
+- [x] Heal job, manual dispatch: `healed: []` → exit 1; a healed source → exit 0.
+- [x] Queue task: a failed summary is logged at ERROR and returned, not raised.
+- [x] GitHub blob creation answers 403 → ERROR log names the step and the status, never the token.

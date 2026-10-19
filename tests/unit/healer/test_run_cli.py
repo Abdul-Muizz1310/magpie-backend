@@ -1,14 +1,23 @@
-"""Tests for ``python -m magpie.healer.run``."""
+"""Tests for ``python -m magpie.healer.run`` — the heal-on-failure job's entrypoint.
+
+The job exits non-zero when any heal target ends without a landed fix
+(spec 03, "A heal ends healed or failed, never silent").
+"""
 
 from __future__ import annotations
 
+import asyncio
+import logging
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
+import pytest
 import yaml
 
 import magpie.healer.run as heal_cli
 from magpie.config.schema import SourceConfig
-from magpie.storage.models import SourceOrigin
+from magpie.healer.outcome import HealedTarget, HealFailure, HealSummary
+from magpie.storage.models import HealMode, SourceOrigin
 from magpie.storage.runs_repo_pg import PgRunRepository
 from magpie.storage.sources_repo import SourcesRepository
 
@@ -22,75 +31,196 @@ item:
     - { name: title, selector: "h2::text" }
     - { name: id, selector: "::attr(data-id)" }
   dedupe_key: id
+health:
+  min_items: 5
 """
 
+T0 = datetime(2026, 10, 1, tzinfo=UTC)
 
-async def _seed_failed_run(session_factory) -> None:
-    cfg = SourceConfig(**yaml.safe_load(SAMPLE_YAML))
+
+def _healed(source: str) -> HealSummary:
+    return HealSummary(
+        source=source,
+        origin=SourceOrigin.file,
+        healed=(
+            HealedTarget(
+                target="container",
+                mode=HealMode.pr,
+                applied=False,
+                pr_url=f"https://github.com/owner/repo/pull/{len(source)}",
+                new_selector="dl#articles > dd",
+            ),
+        ),
+    )
+
+
+def _failed(source: str, reason: str = "LLM error: HTTPStatusError: 404 Not Found") -> HealSummary:
+    return HealSummary(
+        source=source,
+        origin=SourceOrigin.file,
+        failures=(HealFailure(target="container", reason=reason),),
+    )
+
+
+async def _seed_source(session_factory, name: str) -> None:
+    cfg = SourceConfig(**yaml.safe_load(SAMPLE_YAML.replace("heal-cli-src", name)))
     async with session_factory() as session:
-        repo = SourcesRepository(session)
-        src = await repo.create(config=cfg, origin=SourceOrigin.api, yaml_text=SAMPLE_YAML)
-        run_repo = PgRunRepository(session)
-        run = await run_repo.create_queued(source_id=src.id, source_name=src.name)
-        await run_repo.mark_error(run.id, error="boom")
+        await SourcesRepository(session).create(
+            config=cfg,
+            origin=SourceOrigin.file,
+            yaml_text=yaml.safe_dump(cfg.model_dump(mode="json")),
+        )
         await session.commit()
 
 
-class TestHealCli:
-    def test_main_heals_last_failed_run(self, session_factory, monkeypatch) -> None:
-        import asyncio
+async def _add_run(
+    session_factory, name: str, *, at: datetime, error: str | None = None, items: int = 0
+) -> None:
+    """Append one finished run for ``name`` that started at ``at``."""
+    async with session_factory() as session:
+        src = await SourcesRepository(session).get_by_name(name)
+        assert src is not None
+        repo = PgRunRepository(session)
+        run = await repo.create_queued(source_id=src.id, source_name=name)
+        run.started_at = at
+        if error is not None:
+            await repo.mark_error(run.id, error=error, started_at=at)
+        else:
+            await repo.mark_ok(
+                run.id,
+                item_count=items,
+                items_new=items,
+                items_updated=0,
+                items_removed=0,
+                started_at=at,
+            )
+        await session.commit()
 
-        asyncio.run(_seed_failed_run(session_factory))
-        monkeypatch.setattr(heal_cli, "get_session_factory", lambda: session_factory)
 
-        fake_summary = {"source": "heal-cli-src", "origin": "api", "healed": []}
-        with patch(
-            "magpie.healer.run.heal_source",
-            new=AsyncMock(return_value=fake_summary),
-        ) as mock_heal:
-            rc = heal_cli.main([])
-        assert rc == 0
-        assert mock_heal.await_count == 1
+def _run_main(session_factory, monkeypatch, summaries: dict[str, HealSummary]):
+    """Run ``main`` with ``heal_source`` answering from ``summaries``; return (rc, healed)."""
+    monkeypatch.setattr(heal_cli, "get_session_factory", lambda: session_factory)
+    called: list[str] = []
 
-    def test_main_no_failures_returns_zero(self, session_factory, monkeypatch, capsys) -> None:
-        monkeypatch.setattr(heal_cli, "get_session_factory", lambda: session_factory)
+    async def _fake_heal(*, source, run_id, session_factory):  # type: ignore[no-untyped-def]
+        called.append(source)
+        return summaries[source]
+
+    with patch("magpie.healer.run.heal_source", new=AsyncMock(side_effect=_fake_heal)):
         rc = heal_cli.main([])
+    return rc, called
+
+
+@pytest.fixture(autouse=True)
+def _no_dispatch_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HEAL_SOURCE_FILTER", raising=False)
+
+
+class TestTargets:
+    def test_latest_error_run_is_a_target(self, session_factory, monkeypatch) -> None:
+        asyncio.run(_seed_source(session_factory, "errored"))
+        asyncio.run(_add_run(session_factory, "errored", at=T0, error="boom"))
+
+        rc, called = _run_main(session_factory, monkeypatch, {"errored": _healed("errored")})
+
+        assert called == ["errored"]
         assert rc == 0
 
-    def test_main_heals_underflowed_ok_run(self, session_factory, monkeypatch) -> None:
-        """A latest run marked ``ok`` but below min_items is picked up for healing (MAG-1)."""
-        import asyncio
+    def test_latest_ok_run_that_underflowed_is_a_target(self, session_factory, monkeypatch) -> None:
+        """A run marked ``ok`` but below min_items is silent drift (MAG-1)."""
+        asyncio.run(_seed_source(session_factory, "underflow-src"))
+        asyncio.run(_add_run(session_factory, "underflow-src", at=T0, items=1))
 
-        underflow_yaml = SAMPLE_YAML.replace("heal-cli-src", "underflow-src")
+        rc, called = _run_main(
+            session_factory, monkeypatch, {"underflow-src": _healed("underflow-src")}
+        )
 
-        async def _seed_underflow() -> None:
-            cfg = SourceConfig(**yaml.safe_load(underflow_yaml))
-            # Bump min_items so a 1-item ok run counts as underflow.
-            cfg = cfg.model_copy(update={"health": cfg.health.model_copy(update={"min_items": 5})})
-            async with session_factory() as session:
-                repo = SourcesRepository(session)
-                src = await repo.create(
-                    config=cfg,
-                    origin=SourceOrigin.api,
-                    yaml_text=yaml.safe_dump(cfg.model_dump(mode="json")),
-                )
-                run_repo = PgRunRepository(session)
-                run = await run_repo.create_queued(source_id=src.id, source_name=src.name)
-                await run_repo.mark_ok(
-                    run.id, item_count=1, items_new=1, items_updated=0, items_removed=0
-                )
-                await session.commit()
+        assert called == ["underflow-src"]
+        assert rc == 0
 
-        asyncio.run(_seed_underflow())
-        monkeypatch.setattr(heal_cli, "get_session_factory", lambda: session_factory)
+    def test_old_error_with_a_newer_healthy_run_is_not_a_target(
+        self, session_factory, monkeypatch
+    ) -> None:
+        """The 2026-10-19 job re-healed every source that had *ever* errored."""
+        asyncio.run(_seed_source(session_factory, "recovered"))
+        asyncio.run(_add_run(session_factory, "recovered", at=T0, error="old outage"))
+        asyncio.run(_add_run(session_factory, "recovered", at=T0 + timedelta(days=1), items=30))
 
-        healed_sources: list[str] = []
+        rc, called = _run_main(session_factory, monkeypatch, {})
 
-        async def _fake_heal(*, source, run_id, session_factory):  # type: ignore[no-untyped-def]
-            healed_sources.append(source)
-            return {"source": source, "origin": "api", "healed": []}
+        assert called == []
+        assert rc == 0
 
-        with patch("magpie.healer.run.heal_source", new=AsyncMock(side_effect=_fake_heal)):
+    def test_healthy_run_at_min_items_is_not_a_target(self, session_factory, monkeypatch) -> None:
+        asyncio.run(_seed_source(session_factory, "exactly-enough"))
+        asyncio.run(_add_run(session_factory, "exactly-enough", at=T0, items=5))
+
+        rc, called = _run_main(session_factory, monkeypatch, {})
+
+        assert (rc, called) == (0, [])
+
+    def test_no_runs_at_all_means_no_target(self, session_factory, monkeypatch, capsys) -> None:
+        asyncio.run(_seed_source(session_factory, "never-ran"))
+
+        rc, called = _run_main(session_factory, monkeypatch, {})
+
+        assert (rc, called) == (0, [])
+        assert "no failed or underflowed runs to heal" in capsys.readouterr().out
+
+
+class TestExitCode:
+    def test_a_failed_heal_exits_one_and_logs_error(
+        self, session_factory, monkeypatch, caplog
+    ) -> None:
+        asyncio.run(_seed_source(session_factory, "arxiv-cs"))
+        asyncio.run(_add_run(session_factory, "arxiv-cs", at=T0, items=0))
+
+        with caplog.at_level(logging.ERROR, logger="magpie.healer.run"):
+            rc, _ = _run_main(session_factory, monkeypatch, {"arxiv-cs": _failed("arxiv-cs")})
+
+        assert rc == 1
+        errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("arxiv-cs" in m and "404" in m for m in errors), errors
+
+    def test_one_failure_among_successes_still_exits_one(
+        self, session_factory, monkeypatch, caplog
+    ) -> None:
+        for name in ("good-src", "bad-src"):
+            asyncio.run(_seed_source(session_factory, name))
+            asyncio.run(_add_run(session_factory, name, at=T0, error="boom"))
+
+        with caplog.at_level(logging.ERROR, logger="magpie.healer.run"):
+            rc, called = _run_main(
+                session_factory,
+                monkeypatch,
+                {"good-src": _healed("good-src"), "bad-src": _failed("bad-src")},
+            )
+
+        assert sorted(called) == ["bad-src", "good-src"]
+        assert rc == 1
+        errors = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.ERROR)
+        assert "bad-src" in errors
+        assert "good-src" not in errors.replace("bad-src", "")
+
+
+class TestManualDispatch:
+    def _dispatch(self, monkeypatch, summary: HealSummary) -> int:
+        monkeypatch.setenv("HEAL_SOURCE_FILTER", f"  {summary.source}  ")
+        monkeypatch.setattr(heal_cli, "get_session_factory", lambda: None)
+        with patch("magpie.healer.run.heal_source", new=AsyncMock(return_value=summary)) as heal:
             rc = heal_cli.main([])
-        assert rc == 0
-        assert healed_sources == ["underflow-src"]
+        heal.assert_awaited_once()
+        assert heal.await_args is not None
+        assert heal.await_args.kwargs["source"] == summary.source
+        assert heal.await_args.kwargs["run_id"] is None
+        return rc
+
+    def test_dispatch_that_heals_exits_zero(self, monkeypatch) -> None:
+        assert self._dispatch(monkeypatch, _healed("arxiv-cs")) == 0
+
+    def test_dispatch_that_heals_nothing_exits_one(self, monkeypatch, caplog) -> None:
+        nothing = _failed("arxiv-cs", reason="nothing to heal: the live page yields 50 items")
+        with caplog.at_level(logging.ERROR, logger="magpie.healer.run"):
+            rc = self._dispatch(monkeypatch, nothing)
+        assert rc == 1
+        assert any("nothing to heal" in r.getMessage() for r in caplog.records)

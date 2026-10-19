@@ -20,6 +20,32 @@ import httpx
 log = logging.getLogger("magpie.healer.github_pr")
 
 _OK = (200, 201)
+_TOKEN_ENV = "GITHUB_PAT_SCRAPE_HEALER"
+
+
+def _github_message(resp: httpx.Response) -> str:
+    """GitHub's error ``message`` (its JSON error shape), else a short body excerpt."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return resp.text[:200]
+    if isinstance(body, dict) and isinstance(body.get("message"), str):
+        return str(body["message"])
+    return resp.text[:200]
+
+
+def _step_failed(step: str, resp: httpx.Response) -> None:
+    """Log one failed GitHub step at ERROR: step, status, GitHub's message. Never the token."""
+    hint = ""
+    if resp.status_code in (401, 403):
+        hint = f" — the {_TOKEN_ENV} token lacks access (contents:write, pull-requests:write)"
+    log.error(
+        "GitHub %s failed: HTTP %s %s%s",
+        step,
+        resp.status_code,
+        _github_message(resp),
+        hint,
+    )
 
 
 async def create_heal_pr(
@@ -115,7 +141,7 @@ async def _github_api(
             commit_message=commit_message,
         )
         if not committed:
-            log.warning("heal branch/commit creation failed for %s; not opening PR", source_name)
+            log.error("heal branch/commit creation failed for %s; not opening PR", source_name)
             return None
 
         resp = await client.get(
@@ -163,6 +189,7 @@ async def _github_api(
                 label=label,
             )
             return data
+        _step_failed("pull request", resp)
 
     return None
 
@@ -186,13 +213,14 @@ async def _commit_config_to_branch(
     # 1. Resolve the base branch tip commit SHA.
     resp = await client.get(f"/repos/{repo}/git/ref/heads/{base}", headers=headers)
     if resp.status_code != 200:
-        log.warning("could not read base ref %s: %s", base, resp.status_code)
+        _step_failed(f"base ref ({base})", resp)
         return False
     base_sha = resp.json()["object"]["sha"]
 
     # 2. Base commit -> its tree SHA (so we only replace one file).
     resp = await client.get(f"/repos/{repo}/git/commits/{base_sha}", headers=headers)
     if resp.status_code != 200:
+        _step_failed("base commit", resp)
         return False
     base_tree_sha = resp.json()["tree"]["sha"]
 
@@ -203,6 +231,7 @@ async def _commit_config_to_branch(
         json={"content": new_content, "encoding": "utf-8"},
     )
     if resp.status_code not in _OK:
+        _step_failed("blob", resp)
         return False
     blob_sha = resp.json()["sha"]
 
@@ -216,6 +245,7 @@ async def _commit_config_to_branch(
         },
     )
     if resp.status_code not in _OK:
+        _step_failed("tree", resp)
         return False
     tree_sha = resp.json()["sha"]
 
@@ -226,6 +256,7 @@ async def _commit_config_to_branch(
         json={"message": commit_message, "tree": tree_sha, "parents": [base_sha]},
     )
     if resp.status_code not in _OK:
+        _step_failed("commit", resp)
         return False
     commit_sha = resp.json()["sha"]
 
@@ -244,8 +275,11 @@ async def _commit_config_to_branch(
             headers=headers,
             json={"sha": commit_sha, "force": True},
         )
-        return resp.status_code == 200
-    log.warning("could not create branch ref %s: %s", branch, resp.status_code)
+        if resp.status_code == 200:
+            return True
+        _step_failed(f"branch ref update ({branch})", resp)
+        return False
+    _step_failed(f"branch ref ({branch})", resp)
     return False
 
 

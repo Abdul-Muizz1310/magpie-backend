@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import yaml
 
 from magpie.config.schema import SourceConfig
@@ -67,10 +69,11 @@ class TestHealApplyApiOrigin:
                 session_factory=session_factory,
             )
 
-        assert result["origin"] == "api"
-        assert len(result["healed"]) == 1
-        assert result["healed"][0]["mode"] == "db_patch"
-        assert result["healed"][0]["applied"] is True
+        assert result.origin is SourceOrigin.api
+        assert result.succeeded is True
+        assert len(result.healed) == 1
+        assert result.healed[0].mode is HealMode.db_patch
+        assert result.healed[0].applied is True
 
         # Source YAML was patched
         async with session_factory() as session:
@@ -115,9 +118,11 @@ class TestHealApplyFileOrigin:
                 session_factory=session_factory,
             )
 
-        assert result["origin"] == "file"
-        assert result["healed"][0]["mode"] == "pr"
-        assert result["healed"][0]["pr_url"] == "https://github.com/owner/repo/pull/42"
+        assert result.origin is SourceOrigin.file
+        assert result.succeeded is True
+        assert result.failures == ()
+        assert result.healed[0].mode is HealMode.pr
+        assert result.healed[0].pr_url == "https://github.com/owner/repo/pull/42"
 
         # Source YAML was NOT modified (file-origin stays read-only).
         async with session_factory() as session:
@@ -160,7 +165,11 @@ class TestHealApplyRejectsInvalidProposal:
                 session_factory=session_factory,
             )
 
-        assert result["healed"] == []
+        assert result.healed == ()
+        assert result.succeeded is False
+        assert [f.target for f in result.failures] == ["title"]
+        assert result.failures[0].reason.startswith("selector rejected:")
+        assert ".still-missing::text" in result.failures[0].reason
         async with session_factory() as session:
             row = await SourcesRepository(session).get_by_name("rejecty")
             assert row is not None
@@ -201,7 +210,13 @@ item:
                 session_factory=session_factory,
             )
 
-        assert result["healed"] == []
+        # Nothing healable on the live page is a failure, not a quiet success:
+        # the run underflowed and the heal explains nothing (spec 03, 2026-10-20).
+        assert result.healed == ()
+        assert result.succeeded is False
+        assert [f.target for f in result.failures] == ["source"]
+        assert result.failures[0].reason.startswith("nothing to heal:")
+        assert "2 items" in result.failures[0].reason
         fix.assert_not_called()
 
 
@@ -212,8 +227,10 @@ class TestHealApplyMissingSource:
             run_id=None,
             session_factory=session_factory,
         )
-        assert result["healed"] == []
-        assert result["error"] == "source not found"
+        assert result.healed == ()
+        assert result.origin is None
+        assert result.succeeded is False
+        assert [(f.target, f.reason) for f in result.failures] == [("source", "source not found")]
 
 
 class TestHealApplyContainer:
@@ -284,7 +301,7 @@ item:
             assert "div.old-container-class" not in row.config_yaml
 
         # Summary records the container heal.
-        targets = [h["target"] for h in result["healed"]]
+        targets = [h.target for h in result.healed]
         assert "container" in targets
 
 
@@ -378,3 +395,133 @@ item:
         client_cls.assert_called_once()
         # Playwright must not spin up a browser for static sources.
         playwright_cls.assert_not_called()
+
+
+# ── A heal ends healed or failed, never silent (spec 03, 2026-10-20) ─────────
+
+ZERO_ITEM_HTML = """
+<html><body>
+<dl id="articles"><dt><a href="/abs/1">arXiv:1</a></dt><dd><div class="list-title">A</div></dd></dl>
+</body></html>
+"""
+
+
+async def _seed_container_broken(session_factory, *, origin: SourceOrigin, name: str) -> None:
+    yaml_text = BROKEN_YAML.replace("broken", name).replace("div.card", "div.list-entry")
+    cfg = SourceConfig(**yaml.safe_load(yaml_text))
+    async with session_factory() as session:
+        await SourcesRepository(session).create(config=cfg, origin=origin, yaml_text=yaml_text)
+        await session.commit()
+
+
+def _openrouter_404() -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    response = httpx.Response(404, request=request)
+    return httpx.HTTPStatusError("Client error '404 Not Found'", request=request, response=response)
+
+
+class TestHealFailuresAreReported:
+    async def test_llm_error_is_a_failure_naming_the_target(self, session_factory, caplog) -> None:
+        """The 2026-10-19 arxiv-cs run: OpenRouter 404 on every call, summary ``healed: []``."""
+        await _seed_container_broken(session_factory, origin=SourceOrigin.file, name="arxiv-like")
+
+        with (
+            patch("magpie.healer.apply._fetch_html", new=AsyncMock(return_value=ZERO_ITEM_HTML)),
+            patch("magpie.healer.apply.fix_selector", new=AsyncMock(side_effect=_openrouter_404())),
+            patch("magpie.healer.apply.create_heal_pr", new=AsyncMock()) as pr,
+            caplog.at_level(logging.ERROR, logger="magpie.healer"),
+        ):
+            result = await heal_source(
+                source="arxiv-like", run_id=None, session_factory=session_factory
+            )
+
+        assert result.succeeded is False
+        assert result.healed == ()
+        assert [f.target for f in result.failures] == ["container"]
+        assert result.failures[0].reason.startswith("LLM error:")
+        assert "404" in result.failures[0].reason
+        assert any(r.levelno == logging.ERROR for r in caplog.records)
+        pr.assert_not_called()
+
+    async def test_null_selector_is_a_failure(self, session_factory, caplog) -> None:
+        await _seed(session_factory, SourceOrigin.api, name="nully")
+
+        with (
+            patch(
+                "magpie.healer.apply._fetch_html",
+                new=AsyncMock(return_value=HTML_WITH_TITLE_ONLY),
+            ),
+            patch(
+                "magpie.healer.apply.fix_selector",
+                new=AsyncMock(
+                    return_value={
+                        "selector": None,
+                        "confidence": 0.0,
+                        "reasoning": "the page carries no titles",
+                        "sample_values": [],
+                    }
+                ),
+            ),
+            caplog.at_level(logging.ERROR, logger="magpie.healer"),
+        ):
+            result = await heal_source(source="nully", run_id=None, session_factory=session_factory)
+
+        assert result.succeeded is False
+        assert [f.target for f in result.failures] == ["title"]
+        assert result.failures[0].reason.startswith("no selector proposed")
+        assert "the page carries no titles" in result.failures[0].reason
+        assert any(r.levelno == logging.ERROR and "nully" in r.getMessage() for r in caplog.records)
+
+    async def test_file_origin_without_a_pr_is_not_healed(self, session_factory, caplog) -> None:
+        """A validated selector that never reached a PR has not healed anything."""
+        await _seed(session_factory, SourceOrigin.file, name="no-pr")
+
+        with (
+            patch(
+                "magpie.healer.apply._fetch_html",
+                new=AsyncMock(return_value=HTML_WITH_TITLE_ONLY),
+            ),
+            patch(
+                "magpie.healer.apply.fix_selector",
+                new=AsyncMock(
+                    return_value={
+                        "selector": "h2.headline::text",
+                        "confidence": 0.8,
+                        "reasoning": "markup shifted",
+                        "sample_values": ["Hello"],
+                    }
+                ),
+            ),
+            patch("magpie.healer.apply.create_heal_pr", new=AsyncMock(return_value=None)),
+            caplog.at_level(logging.ERROR, logger="magpie.healer"),
+        ):
+            result = await heal_source(source="no-pr", run_id=None, session_factory=session_factory)
+
+        assert result.succeeded is False
+        assert result.healed == ()
+        assert [f.target for f in result.failures] == ["title"]
+        assert result.failures[0].reason.startswith("PR not opened")
+        assert any(r.levelno == logging.ERROR for r in caplog.records)
+        # The attempt is still recorded for the /heals history.
+        async with session_factory() as session:
+            row = await SourcesRepository(session).get_by_name("no-pr")
+            assert row is not None
+            heals = await HealsRepository(session).list_for_source(row.id)
+            assert len(heals) == 1
+            assert heals[0].pr_url is None
+
+    async def test_fetch_failure_is_a_failure(self, session_factory) -> None:
+        await _seed(session_factory, SourceOrigin.api, name="unreachable")
+
+        with patch(
+            "magpie.healer.apply._fetch_html",
+            new=AsyncMock(side_effect=httpx.ConnectError("name not resolved")),
+        ):
+            result = await heal_source(
+                source="unreachable", run_id=None, session_factory=session_factory
+            )
+
+        assert result.succeeded is False
+        assert result.origin is SourceOrigin.api
+        assert [f.target for f in result.failures] == ["source"]
+        assert result.failures[0].reason.startswith("fetch failed:")
