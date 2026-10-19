@@ -11,18 +11,18 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.18.5",
     "asyncpg>=0.30",
-    "beautifulsoup4>=4.14.3",
+    "beautifulsoup4>=4.15.0",
     "fastapi>=0.135.3",
     "httpx>=0.28.1",
     "parsel>=1.11.0",
-    "playwright>=1.58.0",
+    "playwright>=1.62.0",
     "procrastinate>=3.0",
     "prometheus-fastapi-instrumentator>=7.0",
     "psycopg[binary]>=3.1",
     "pydantic>=2.13.4",
-    "pyjwt[crypto]>=2.9",
+    "pyjwt[crypto]>=2.13.0",
     "pyyaml>=6.0.3",
-    "scrapy>=2.15.0",
+    "scrapy>=2.17.0",
     "sqlalchemy>=2.0.49",
     "uvicorn>=0.44.0",
 ]
@@ -40,14 +40,14 @@ build-backend = "uv_build"
 dev = [
     "aiosqlite>=0.22.1",
     "lxml-stubs>=0.5",
-    "mypy>=2.3.0",
+    "mypy>=2.4.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.16.0",
+    "ruff>=0.17.0",
     "testcontainers[postgres]>=4.15.0",
     "types-beautifulsoup4>=4.12.0.20250516",
-    "types-pyyaml>=6.0.12.20260724",
+    "types-pyyaml>=6.0.12.20260906",
 ]
 
 [tool.ruff]
