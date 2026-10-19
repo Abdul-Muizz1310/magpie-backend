@@ -54,8 +54,9 @@ class TestModelDefault:
             f"DEFAULT_MODEL {DEFAULT_MODEL!r} is not a free-tier slug — an unset "
             "OPENROUTER_MODEL_PRIMARY would bill paid credits (MAG-5)."
         )
-        # Pin the exact portfolio-approved slug so a paid swap is caught explicitly.
-        assert DEFAULT_MODEL == "nvidia/nemotron-nano-9b-v2:free"
+        # Pin the portfolio's primary free model (global pick, 2026-10-20) so a paid swap,
+        # or a slug OpenRouter has withdrawn, is caught explicitly.
+        assert DEFAULT_MODEL == "google/gemma-4-26b-a4b-it:free"
 
     @pytest.mark.asyncio
     async def test_uses_free_default_when_model_env_unset(self) -> None:

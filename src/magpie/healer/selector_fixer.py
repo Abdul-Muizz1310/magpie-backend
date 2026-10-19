@@ -18,10 +18,10 @@ MAX_HTML_LENGTH = 40000
 MAX_RETRIES = 3
 RETRY_BASE_DELAY_S = 2.0
 
-# Default to the portfolio's chosen free-tier OpenRouter slug rather than a paid
-# model. An unset OPENROUTER_MODEL_PRIMARY must never silently bill paid credits
-# (MAG-5) — the free ``:free`` variant is the safe default for the demo deploy.
-DEFAULT_MODEL = "nvidia/nemotron-nano-9b-v2:free"
+# Default to the portfolio's primary free OpenRouter model rather than a paid one.
+# An unset OPENROUTER_MODEL_PRIMARY must never silently bill paid credits (MAG-5).
+# render.yaml and heal-on-failure.yml name the same slug (tests/unit/test_ops_baseline.py).
+DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
 
 
 class _LLMSelectorProposal(BaseModel):

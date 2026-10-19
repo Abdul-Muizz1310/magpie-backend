@@ -200,3 +200,39 @@ def test_no_workflow_injects_unused_r2_credentials() -> None:
     }
     leaking = {name: lines for name, lines in offenders.items() if lines}
     assert leaking == {}, f"workflows export R2_* that nothing reads: {leaking}"
+
+
+# ── One model slug everywhere it is defaulted ────────────────────────────────
+
+HEAL_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "heal-on-failure.yml"
+RENDER_BLUEPRINT = REPO_ROOT / "render.yaml"
+_MODEL_ENV = "OPENROUTER_MODEL_PRIMARY"
+
+
+def test_render_blueprint_defaults_to_the_code_default_model() -> None:
+    """render.yaml's explicit slug and the code fallback must name the same model.
+
+    Two defaults that drift apart mean the deploy and the heal job run different
+    models, and one of them can be a slug OpenRouter has withdrawn (404 on every
+    call — what happened to ``nvidia/nemotron-nano-9b-v2:free``).
+    """
+    from magpie.healer.selector_fixer import DEFAULT_MODEL
+
+    blueprint = yaml.safe_load(RENDER_BLUEPRINT.read_text(encoding="utf-8"))
+    env = {
+        entry["key"]: entry.get("value")
+        for service in blueprint["services"]
+        for entry in service["envVars"]
+    }
+    assert env[_MODEL_ENV] == DEFAULT_MODEL
+
+
+def test_heal_workflow_pins_the_code_default_model() -> None:
+    """The heal job names its model in the workflow, not in an unseen secret."""
+    from magpie.healer.selector_fixer import DEFAULT_MODEL
+
+    jobs = _workflow(HEAL_WORKFLOW)["jobs"]
+    assert isinstance(jobs, dict)
+    heal_steps = jobs["heal"]["steps"]
+    healer_step = next(s for s in heal_steps if "magpie.healer.run" in str(s.get("run", "")))
+    assert healer_step["env"][_MODEL_ENV] == DEFAULT_MODEL

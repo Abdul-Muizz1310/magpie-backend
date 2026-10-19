@@ -33,6 +33,9 @@ jobs:
       - run: uv run python -m magpie.healer.run
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Same slug as selector_fixer.DEFAULT_MODEL and render.yaml (held equal by
+          # tests/unit/test_ops_baseline.py); named here so the job's model is visible.
+          OPENROUTER_MODEL_PRIMARY: google/gemma-4-26b-a4b-it:free
           GITHUB_PAT_SCRAPE_HEALER: ${{ secrets.PAT_SCRAPE_HEALER }}
           # No R2_* here on purpose: the healer re-fetches the source's live HTML
           # (healer/apply._fetch_html) and no shipped module reads an R2 variable.

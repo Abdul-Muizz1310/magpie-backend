@@ -25,8 +25,9 @@ services:
         value: https://openrouter.ai/api/v1
       # Explicit free-tier slug so an unset dashboard value never silently
       # falls back to a paid model (MAG-5). Override in the dashboard if needed.
+      # Same slug as selector_fixer.DEFAULT_MODEL and heal-on-failure.yml.
       - key: OPENROUTER_MODEL_PRIMARY
-        value: nvidia/nemotron-nano-9b-v2:free
+        value: google/gemma-4-26b-a4b-it:free
       - key: GITHUB_PAT_SCRAPE_HEALER
         sync: false
       - key: GITHUB_REPO
