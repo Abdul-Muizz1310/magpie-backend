@@ -96,8 +96,9 @@ Each heal row records: field name, old + new selector, confidence, LLM reasoning
 
 The frontend (magpie-frontend) consumes these.
 
-## 8. The weekly cron + heal-on-failure flow (optional)
+## 8. The scheduled scrape + heal-on-failure flow (optional)
 
-- `nightly-scrape.yml` runs every Sunday 00:00 UTC, matrix strategy over every file-origin config.
-- If any job fails, `heal-on-failure.yml` fires via `workflow_run` trigger, pulls the failed-run records from Postgres, and invokes the healer for each source.
+- `nightly-scrape.yml` runs hourly; its matrix covers the file-origin configs whose own `schedule` cron fires that hour. A leg exits non-zero on a scrape error or a `min_items` underflow.
+- If any leg fails, `heal-on-failure.yml` fires via `workflow_run`, finds the sources whose latest run errored or underflowed, and invokes the healer for each. `gh workflow run heal-on-failure.yml -f source=<name>` heals one source on demand.
 - File-origin sources get a GitHub PR labeled `scrape:self-heal`; api-origin sources get the fix written straight to `sources.config_yaml`.
+- A heal that does not land (LLM error, rejected selector, PR not opened, nothing healable) is logged at ERROR and the heal job exits 1.

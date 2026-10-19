@@ -12,8 +12,8 @@
 ![pydantic](https://img.shields.io/badge/Pydantic-v2%20strict-e92063?style=flat-square)
 ![neon](https://img.shields.io/badge/Neon-Postgres-00e599?style=flat-square&logo=postgresql&logoColor=white)
 [![ci](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml)
-![coverage](https://img.shields.io/badge/coverage-92%25-brightgreen?style=flat-square)
-![tests](https://img.shields.io/badge/tests-473%20passed-brightgreen?style=flat-square)
+![coverage](https://img.shields.io/badge/coverage-93%25-brightgreen?style=flat-square)
+![tests](https://img.shields.io/badge/tests-534%20passed-brightgreen?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
 
 ---
@@ -47,6 +47,7 @@ Scrapers break constantly. Selectors rot when sites redesign. The usual fix: som
 - 📝 **One YAML = one spider** — a factory pattern emits Scrapy (static) or Playwright (JS-rendered) from the same config schema; CSS **and** XPath selectors are both supported per-field.
 - 🧬 **Self-healing via LLM + PR or in-place patch** — zero items (or a dead container selector) triggers a healer that re-fetches HTML, re-derives selectors via an LLM, validates them, and either opens a GitHub PR (for file-origin configs) or writes the fix directly to Postgres (for api-origin configs).
 - 🔒 **No auto-merge for file-origin heals** — PRs labeled `scrape:self-heal` require human review.
+- 📣 **A heal that does not land fails loudly** — an LLM error, a rejected selector, a PR that could not be opened or nothing healable on the live page is logged at ERROR and turns the heal job red; it is never reported as success.
 - 🔑 **Content-addressed deduplication** — items are SHA-256 hashed with NFC normalization; runs produce diffs (new / updated / removed), not full dumps.
 - 🛡️ **Strict config validation** — Pydantic v2 with `extra="forbid"` + compiled selector checks; typos and broken selectors fail at submit time, not at scrape time.
 - ⚙️ **Async task queue** — scrapes run via Procrastinate (Postgres-backed) with retry + exponential backoff; a stale-run reaper cleans up after worker crashes.
@@ -61,8 +62,8 @@ Scrapers break constantly. Selectors rot when sites redesign. The usual fix: som
 - 🗄️ Neon Postgres persistence with async SQLAlchemy + Alembic migrations.
 - 🧵 Async task queue (Procrastinate) embedded in the FastAPI lifespan; no separate worker service required on Render's free tier.
 - 🔎 FastAPI API — viewer endpoints (`/sources`, `/runs`, `/heals`) + custom-source CRUD (`/api/sources`) + async enqueue (`/api/scrape/{source}/enqueue`).
-- ⏰ GitHub Actions: CI + weekly scrape (Sundays 00:00 UTC) + heal-on-failure.
-- 🧪 475 tests, mypy strict, ruff clean.
+- ⏰ GitHub Actions: CI + hourly scrape dispatch (each source on its own `schedule` cron) + heal-on-failure.
+- 🧪 536 tests (534 run, 2 live-smoke tests skip without `SMOKE_BASE_URL`), mypy strict, ruff clean.
 - 📦 7 shipped configs: hackernews, arxiv-cs, lobsters, huggingface-papers, github-trending, producthunt-today, wikipedia-current-events.
 
 ---
@@ -99,7 +100,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    Cron([GitHub Actions cron<br/>weekly, Sunday 00:00 UTC]) --> Matrix[Matrix strategy<br/>one job per source]
+    Cron([GitHub Actions cron<br/>hourly, per-source schedule]) --> Matrix[Matrix strategy<br/>one job per source]
     Matrix --> Load[Load config YAML]
     Load --> Factory{render?}
     Factory -- "static" --> Scrapy[Scrapy spider]
@@ -245,7 +246,7 @@ Dockerfile                     # Image with chromium + non-root user + HEALTHCHE
 | `GET` | `/sources/{name}/items` | Latest non-removed items for one source (`limit`, `offset`) |
 | `GET` | `/heals` | Heal history with PR links |
 | `GET` | `/health` | Health check (200 OK, **503 when DB is down**) |
-| `GET` | `/version` | Commit SHA — `COMMIT_SHA` build arg, else Render's `RENDER_GIT_COMMIT` |
+| `GET` | `/version` | Package semver as `version`; commit SHA as `commit_sha` (`COMMIT_SHA` build arg, else Render's `RENDER_GIT_COMMIT`) |
 | `GET` | `/metrics` | Prometheus exposition (`prometheus-fastapi-instrumentator`, excluded from the OpenAPI schema) |
 
 ### Custom sources (runtime config management)
@@ -296,7 +297,7 @@ Dockerfile                     # Image with chromium + non-root user + HEALTHCHE
 | **Content hashing** | SHA-256 with NFC normalization |
 | **Scheduling** | GitHub Actions hourly dispatch; each source runs on its own `schedule` cron |
 | **Artifact storage** | Cloudflare R2 (future — not yet wired for snapshots) |
-| **Healer LLM** | OpenRouter (configurable model via `OPENROUTER_MODEL_PRIMARY`) |
+| **Healer LLM** | OpenRouter, free `google/gemma-4-26b-a4b-it:free` by default (override via `OPENROUTER_MODEL_PRIMARY`) |
 | **GitHub PRs** | httpx + GitHub REST API (idempotent per `heal/{source}` branch) |
 | **API framework** | FastAPI |
 | **CI** | GitHub Actions (lint + test with PG service + Docker build + push-gated post-deploy smoke), uv cached |
@@ -397,12 +398,12 @@ README unnoticed.
 
 | Metric | Value |
 |---|---|
-| **Test count** | 475 tests |
+| **Test count** | 536 tests (534 pass locally and in CI; the 2 live-smoke tests run only in the push-gated `smoke` job) |
 | **Type discipline** | mypy strict clean, no `Any` leaking across module boundaries |
 | **Linting** | ruff check + ruff format clean |
 | **Config validation** | 35 tests (XPath, CSS, selector compile-check, cross-field validators) |
 | **Dedup accuracy** | in-memory + Postgres repos both cover new/update/remove/reappear |
-| **Healer coverage** | container heal + field heal, file-origin PR + api-origin db-patch |
+| **Healer coverage** | container heal + field heal, file-origin PR + api-origin db-patch, and every way a heal can fail (heal job exits 1) |
 | **Postgres tier** | Testcontainers `postgres:16-alpine` — Alembic head, FK cascades, `FOR UPDATE` serialisation, native enum domains |
 | **Heal-rate eval** | 5/6 breakage archetypes repaired = 83.33% (`uv run magpie-eval`) |
 | **CI pipeline** | lint + test (against real Postgres service) + Docker build, which asserts the image baked a real `COMMIT_SHA`, then a push-only `smoke` job that probes the live deploy via the `SMOKE_BASE_URL` variable (inert when unset) |
