@@ -13,7 +13,7 @@
 ![neon](https://img.shields.io/badge/Neon-Postgres-00e599?style=flat-square&logo=postgresql&logoColor=white)
 [![ci](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml)
 ![coverage](https://img.shields.io/badge/coverage-93%25-brightgreen?style=flat-square)
-![tests](https://img.shields.io/badge/tests-597%20passed-brightgreen?style=flat-square)
+![tests](https://img.shields.io/badge/tests-601%20passed-brightgreen?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
 
 ---
@@ -63,7 +63,7 @@ Scrapers break constantly. Selectors rot when sites redesign. The usual fix: som
 - 🧵 Async task queue (Procrastinate) embedded in the FastAPI lifespan; no separate worker service required on Render's free tier.
 - 🔎 FastAPI API — viewer endpoints (`/sources`, `/runs`, `/heals`) + custom-source CRUD (`/api/sources`) + async enqueue (`/api/scrape/{source}/enqueue`).
 - ⏰ GitHub Actions: CI + hourly scrape dispatch (each source on its own `schedule` cron) + heal-on-failure.
-- 🧪 599 tests (597 run, 2 live-smoke tests skip without `SMOKE_BASE_URL`), mypy strict, ruff clean.
+- 🧪 603 tests (601 run, 2 live-smoke tests skip without `SMOKE_BASE_URL`), mypy strict, ruff clean.
 - 📦 7 shipped configs: hackernews, arxiv-cs, lobsters, huggingface-papers, github-trending, producthunt-today, wikipedia-current-events.
 
 ---
@@ -399,7 +399,7 @@ README unnoticed.
 
 | Metric | Value |
 |---|---|
-| **Test count** | 599 tests (597 pass locally and in CI; the 2 live-smoke tests run only in the push-gated `smoke` job) |
+| **Test count** | 603 tests (601 pass locally and in CI; the 2 live-smoke tests run only in the push-gated `smoke` job) |
 | **Type discipline** | mypy strict clean, no `Any` leaking across module boundaries |
 | **Linting** | ruff check + ruff format clean |
 | **Config validation** | 35 tests (XPath, CSS, selector compile-check, cross-field validators) |

@@ -12,10 +12,11 @@ It intentionally runs regardless of ``DEMO_MODE`` — it's an abuse ceiling, not
 authentication. ``RATE_LIMIT_PER_MINUTE <= 0`` disables it (documented escape
 hatch for trusted single-tenant deploys).
 
-Buckets (contract v2, spec 10): an authenticated request keys on ``"{iss}:{sub}"``
-from its platform token; anything else on the client address, which uvicorn sets
-to the leftmost ``X-Forwarded-For`` entry behind Render. The limiter must run
-inside the token middleware so the principal is known (``magpie.main``).
+Buckets (contract v2 as amended 2026-10-20, spec 10): a bastion token keys on
+``"bastion:{sub}"``; a magpie-frontend token on ``"magpie-frontend:{address}"``
+(its ``sub`` is constant); anything else on the address. The address is the
+leftmost ``X-Forwarded-For`` entry, which uvicorn resolves behind Render. The
+limiter must run inside the token middleware so the principal is known.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from collections.abc import Awaitable, Callable
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
-from magpie.platform.principal import principal_of
+from magpie.platform.principal import principal_of, rate_limit_key
 
 _Handler = Callable[[Request], Awaitable[Response]]
 
@@ -48,11 +49,9 @@ def _limit_from_env() -> int:
 
 
 def bucket_key(request: Request) -> str:
-    """``"{iss}:{sub}"`` for an authenticated request, else the client address."""
-    principal = principal_of(request)
-    if principal is not None:
-        return principal.rate_limit_key
-    return request.client.host if request.client else "unknown"
+    """The request's bucket: see :func:`magpie.platform.principal.rate_limit_key`."""
+    address = request.client.host if request.client else "unknown"
+    return rate_limit_key(principal_of(request), address)
 
 
 def install_rate_limit(app: FastAPI, *, limit_per_minute: int | None = None) -> None:

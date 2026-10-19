@@ -29,7 +29,7 @@ from magpie.platform.platform_token import (
     PlatformAuthSettings,
     install_platform_token,
 )
-from magpie.platform.principal import Principal, principal_of
+from magpie.platform.principal import Minter, Principal, principal_of, rate_limit_key
 from magpie.platform.rate_limit import bucket_key
 
 SERVICE = "magpie"
@@ -260,7 +260,10 @@ class TestConformance:
         # …and a protected route really is protected on that app.
         assert client.get("/sources").json() == {"detail": "missing_platform_token"}
 
-    def test_14_rate_limit_key_is_iss_colon_sub_when_authenticated(self, bastion: _Key) -> None:
+    def test_14_bastion_buckets_on_sub_and_frontend_on_the_forwarded_address(
+        self, bastion: _Key, frontend: _Key
+    ) -> None:
+        """Contract §2 as amended 2026-10-20: a frontend's ``sub`` is constant."""
         app = FastAPI()
         seen: list[str] = []
 
@@ -270,9 +273,20 @@ class TestConformance:
             return {}
 
         install_platform_token(app, settings=PlatformAuthSettings(False, False))
-        client = TestClient(app)
-        assert _get(client, _sign(bastion, _bastion_claims(sub="v_visitor001")))[0] == 200
-        assert seen == ["bastion:v_visitor001"]
+        client = TestClient(ProxyHeadersMiddleware(app, trusted_hosts="*"))
+        fe_token = _sign(frontend, _frontend_claims())
+        calls = [
+            {"X-Platform-Token": _sign(bastion, _bastion_claims(sub="v_visitor001"))},
+            {"X-Platform-Token": fe_token, "X-Forwarded-For": "203.0.113.7"},
+            {"X-Platform-Token": fe_token, "X-Forwarded-For": "198.51.100.9"},
+        ]
+        for headers in calls:
+            assert client.get("/protected", headers=headers).status_code == 200
+        assert seen == [
+            "bastion:v_visitor001",
+            "magpie-frontend:203.0.113.7",
+            "magpie-frontend:198.51.100.9",
+        ]
 
 
 # ── magpie extras (spec 10) ──────────────────────────────────────────────────
@@ -504,6 +518,20 @@ class TestComposedApp:
         # Another visitor from the same address has their own bucket.
         assert post("v_bob0000001", same_ip) == 404
 
+    def test_frontend_visitors_get_buckets_by_their_forwarded_address(self, frontend: _Key) -> None:
+        app = create_app(auth=PlatformAuthSettings(False, False), rate_limit_per_minute=1)
+        client = TestClient(ProxyHeadersMiddleware(app, trusted_hosts="*"))
+        token = _sign(frontend, _frontend_claims())
+
+        def post(address: str) -> int:
+            headers = {"X-Platform-Token": token, "X-Forwarded-For": address}
+            return client.post("/__rate_probe__", headers=headers).status_code
+
+        assert post("203.0.113.7") == 404
+        assert post("203.0.113.7") == 429
+        # Same frontend, same token shape, another visitor: their own bucket.
+        assert post("198.51.100.9") == 404
+
     def test_unauthenticated_demo_callers_fall_back_to_the_forwarded_address(self) -> None:
         app = create_app(auth=PlatformAuthSettings(True, False), rate_limit_per_minute=1)
         client = TestClient(ProxyHeadersMiddleware(app, trusted_hosts="*"))
@@ -514,6 +542,36 @@ class TestComposedApp:
         assert client.post("/__rate_probe__", headers=second).status_code == 404
 
 
-class TestPrincipal:
-    def test_rate_limit_key(self) -> None:
-        assert Principal(iss="bastion", sub="v_x", role="viewer").rate_limit_key == "bastion:v_x"
+class TestRateLimitKey:
+    def test_bastion_principal_keys_on_sub(self) -> None:
+        principal = Principal(iss="bastion", sub="v_x", role="viewer", minter=Minter.bastion)
+        assert rate_limit_key(principal, "203.0.113.7") == "bastion:v_x"
+
+    def test_frontend_principal_keys_on_the_address(self) -> None:
+        principal = Principal(
+            iss="magpie-frontend", sub="magpie-frontend", role="frontend", minter=Minter.frontend
+        )
+        assert rate_limit_key(principal, "203.0.113.7") == "magpie-frontend:203.0.113.7"
+
+    def test_anonymous_keys_on_the_address(self) -> None:
+        assert rate_limit_key(None, "203.0.113.7") == "203.0.113.7"
+
+    def test_the_verifier_records_which_key_signed(self, bastion: _Key, frontend: _Key) -> None:
+        from magpie.platform.platform_token import load_frontend_key, parse_ed25519_public_key
+
+        bastion_key = parse_ed25519_public_key(bastion.pub_b64)
+        frontend_key = load_frontend_key()
+        now = time.time()
+        b = platform_token.verify_platform_token(
+            _sign(bastion, _bastion_claims()),
+            bastion_key=bastion_key,
+            frontend_key=frontend_key,
+            now=now,
+        )
+        f = platform_token.verify_platform_token(
+            _sign(frontend, _frontend_claims()),
+            bastion_key=bastion_key,
+            frontend_key=frontend_key,
+            now=now,
+        )
+        assert (b.minter, f.minter) == (Minter.bastion, Minter.frontend)

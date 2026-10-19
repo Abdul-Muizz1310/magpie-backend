@@ -59,8 +59,9 @@ services:
       # iss "magpie-frontend" with role "frontend".
       - key: MAGPIE_FRONTEND_SIGNING_KEY_PUBLIC
         sync: false
-      # Rate limit for mutating/scrape/enqueue routes (requests/minute), per
-      # token "iss:sub" when authenticated, else per forwarded client address.
+      # Rate limit for mutating/scrape/enqueue routes (requests/minute): per
+      # "bastion:{sub}" for bastion tokens, per "magpie-frontend:{address}" for
+      # the frontend's, else per forwarded client address.
       - key: RATE_LIMIT_PER_MINUTE
         value: "30"
       - key: FRONTEND_URL

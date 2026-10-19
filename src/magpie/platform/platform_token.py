@@ -39,7 +39,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
-from magpie.platform.principal import Principal, attach_principal
+from magpie.platform.principal import Minter, Principal, attach_principal
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,9 @@ TOKEN_HEADER: Final = "x-platform-token"
 BASTION_KEY_ENV: Final = "BASTION_SIGNING_KEY_PUBLIC"
 BASTION_KEY_URL_ENV: Final = "BASTION_PUBLIC_KEY_URL"
 FRONTEND_KEY_ENV: Final = "MAGPIE_FRONTEND_SIGNING_KEY_PUBLIC"
+
+# The key decides the issuer: each trusted key admits exactly one ``iss``.
+_ISSUER: Final = {Minter.bastion: BASTION_ISS, Minter.frontend: FRONTEND_ISS}
 
 _PUBLIC_EXACT = frozenset({"/health", "/version", "/metrics", "/openapi.json", "/docs", "/redoc"})
 _PUBLIC_PREFIXES = ("/docs/", "/redoc/")
@@ -114,12 +117,13 @@ def _is_int(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def check_claims(claims: Mapping[str, Any], *, expected_iss: str, now: float) -> Principal:
-    """Validate the claims of a token whose signature ``expected_iss``'s key verified."""
+def check_claims(claims: Mapping[str, Any], *, minter: Minter, now: float) -> Principal:
+    """Validate the claims of a token whose signature ``minter``'s key verified."""
+    expected_iss = _ISSUER[minter]
     if claims.get("iss") != expected_iss:
         raise InvalidPlatformTokenError(TokenCheck.iss)
     role = claims.get("role")
-    if expected_iss == FRONTEND_ISS and role != FRONTEND_ROLE:
+    if minter is Minter.frontend and role != FRONTEND_ROLE:
         raise InvalidPlatformTokenError(TokenCheck.role)
     aud = claims.get("aud")
     if not isinstance(aud, str) or aud != SERVICE_ID:
@@ -138,7 +142,12 @@ def check_claims(claims: Mapping[str, Any], *, expected_iss: str, now: float) ->
     sub = claims.get("sub")
     if not isinstance(sub, str) or not sub:
         raise InvalidPlatformTokenError(TokenCheck.sub)
-    return Principal(iss=expected_iss, sub=sub, role=role if isinstance(role, str) else None)
+    return Principal(
+        iss=expected_iss,
+        sub=sub,
+        role=role if isinstance(role, str) else None,
+        minter=minter,
+    )
 
 
 def _verified_claims(token: str, key: Ed25519PublicKey) -> dict[str, Any] | None:
@@ -170,12 +179,12 @@ def verify_platform_token(
         raise InvalidPlatformTokenError(TokenCheck.malformed) from exc
     if header.get("alg") != "EdDSA":
         raise InvalidPlatformTokenError(TokenCheck.alg)
-    for key, issuer in ((bastion_key, BASTION_ISS), (frontend_key, FRONTEND_ISS)):
+    for key, minter in ((bastion_key, Minter.bastion), (frontend_key, Minter.frontend)):
         if key is None:
             continue
         claims = _verified_claims(token, key)
         if claims is not None:
-            return check_claims(claims, expected_iss=issuer, now=now)
+            return check_claims(claims, minter=minter, now=now)
     raise InvalidPlatformTokenError(TokenCheck.signature)
 
 

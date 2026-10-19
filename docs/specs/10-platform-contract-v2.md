@@ -55,9 +55,18 @@ An authenticated request carries its principal (`iss`, `sub`, `role`) on `reques
 
 ## Rate limiting
 
-The limiter runs inside the token middleware. Authenticated → bucket `"{iss}:{sub}"`; otherwise the
-client address, which uvicorn sets to the leftmost `X-Forwarded-For` entry (`--proxy-headers
---forwarded-allow-ips '*'`, spec 09).
+The limiter runs inside the token middleware. The bucket depends on the key that verified the token
+(contract §2, amended 2026-10-20):
+
+| request | bucket |
+|---|---|
+| bastion's key | `"bastion:{sub}"` (`sub` is the visitor pseudonym) |
+| magpie-frontend's key | `"magpie-frontend:{client address}"` — the frontend's `sub` is constant, so keying on it would put every visitor of the site in one bucket |
+| unauthenticated | `"{client address}"` |
+
+The client address is what uvicorn derives from the leftmost `X-Forwarded-For` entry
+(`--proxy-headers --forwarded-allow-ips '*'`, spec 09). magpie-frontend's proxy sets exactly one
+address there itself.
 
 ## CORS
 
@@ -80,7 +89,8 @@ CORS is the outermost middleware, so a browser preflight is answered before the 
 11. [x] Present-but-invalid token with `DEMO_MODE=true` ⇒ still 401 invalid.
 12. [x] No trusted key (non-test settings) ⇒ 503 on a protected route, 200 on `/health`.
 13. [x] Every public route answers without a token (on the real app, keys configured).
-14. [x] Rate-limit key is `iss:sub` for an authenticated request.
+14. [x] Rate-limit key is `bastion:{sub}` for a bastion token and `magpie-frontend:{forwarded address}`
+    for a frontend token; two visitors through the frontend land in different buckets.
 
 magpie extras:
 
@@ -96,6 +106,8 @@ magpie extras:
       x-platform-token` is answered 200 and allows the header; a 401 carries
       `Access-Control-Allow-Origin` for an allowed origin.
 - [x] Composed app: two bastion visitors (different `sub`) from one address get separate buckets;
-      unauthenticated callers fall back to the forwarded address.
+      two frontend visitors (one token shape, different forwarded addresses) get separate buckets and
+      one visitor's repeat calls share one; unauthenticated callers fall back to the forwarded
+      address.
 - [x] A malformed key value warns once by variable name and counts as absent (with no other key ⇒
       503 outside test settings).
