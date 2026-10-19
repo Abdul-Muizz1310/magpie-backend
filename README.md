@@ -13,7 +13,7 @@
 ![neon](https://img.shields.io/badge/Neon-Postgres-00e599?style=flat-square&logo=postgresql&logoColor=white)
 [![ci](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml)
 ![coverage](https://img.shields.io/badge/coverage-93%25-brightgreen?style=flat-square)
-![tests](https://img.shields.io/badge/tests-534%20passed-brightgreen?style=flat-square)
+![tests](https://img.shields.io/badge/tests-597%20passed-brightgreen?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
 
 ---
@@ -63,7 +63,7 @@ Scrapers break constantly. Selectors rot when sites redesign. The usual fix: som
 - 🧵 Async task queue (Procrastinate) embedded in the FastAPI lifespan; no separate worker service required on Render's free tier.
 - 🔎 FastAPI API — viewer endpoints (`/sources`, `/runs`, `/heals`) + custom-source CRUD (`/api/sources`) + async enqueue (`/api/scrape/{source}/enqueue`).
 - ⏰ GitHub Actions: CI + hourly scrape dispatch (each source on its own `schedule` cron) + heal-on-failure.
-- 🧪 536 tests (534 run, 2 live-smoke tests skip without `SMOKE_BASE_URL`), mypy strict, ruff clean.
+- 🧪 599 tests (597 run, 2 live-smoke tests skip without `SMOKE_BASE_URL`), mypy strict, ruff clean.
 - 📦 7 shipped configs: hackernews, arxiv-cs, lobsters, huggingface-papers, github-trending, producthunt-today, wikipedia-current-events.
 
 ---
@@ -222,7 +222,8 @@ src/magpie/
     ├── metrics.py             # Prometheus /metrics instrumentation
     ├── logging.py             # Structured logging
     ├── middleware.py          # CORS, request ID
-    ├── platform_token.py      # X-Platform-Token verification (bastion + frontend keys)
+    ├── platform_token.py      # Platform token contract v2 (aud magpie; bastion + frontend keys)
+    ├── principal.py           # The verified iss/sub/role a request carries
     └── rate_limit.py          # Per-IP limiter on mutating routes
 
 alembic/                       # Migrations
@@ -398,12 +399,13 @@ README unnoticed.
 
 | Metric | Value |
 |---|---|
-| **Test count** | 536 tests (534 pass locally and in CI; the 2 live-smoke tests run only in the push-gated `smoke` job) |
+| **Test count** | 599 tests (597 pass locally and in CI; the 2 live-smoke tests run only in the push-gated `smoke` job) |
 | **Type discipline** | mypy strict clean, no `Any` leaking across module boundaries |
 | **Linting** | ruff check + ruff format clean |
 | **Config validation** | 35 tests (XPath, CSS, selector compile-check, cross-field validators) |
 | **Dedup accuracy** | in-memory + Postgres repos both cover new/update/remove/reappear |
 | **Healer coverage** | container heal + field heal, file-origin PR + api-origin db-patch, and every way a heal can fail (heal job exits 1) |
+| **Platform auth** | contract v2 conformance tests 1 to 14 plus magpie extras (`tests/unit/test_platform_contract_v2.py`) |
 | **Postgres tier** | Testcontainers `postgres:16-alpine` — Alembic head, FK cascades, `FOR UPDATE` serialisation, native enum domains |
 | **Heal-rate eval** | 5/6 breakage archetypes repaired = 83.33% (`uv run magpie-eval`) |
 | **CI pipeline** | lint + test (against real Postgres service) + Docker build, which asserts the image baked a real `COMMIT_SHA`, then a push-only `smoke` job that probes the live deploy via the `SMOKE_BASE_URL` variable (inert when unset) |
