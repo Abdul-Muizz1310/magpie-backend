@@ -23,6 +23,7 @@ dependencies = [
     "pyjwt[crypto]>=2.13.0",
     "pyyaml>=6.0.3",
     "scrapy>=2.17.0",
+    "slowquery-detective[fastapi,postgres]>=0.2,<0.3",
     "sqlalchemy>=2.0.49",
     "uvicorn>=0.44.0",
 ]

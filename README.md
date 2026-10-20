@@ -13,7 +13,7 @@
 ![neon](https://img.shields.io/badge/Neon-Postgres-00e599?style=flat-square&logo=postgresql&logoColor=white)
 [![ci](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Abdul-Muizz1310/magpie-backend/actions/workflows/ci.yml)
 ![coverage](https://img.shields.io/badge/coverage-93%25-brightgreen?style=flat-square)
-![tests](https://img.shields.io/badge/tests-601%20passed-brightgreen?style=flat-square)
+![tests](https://img.shields.io/badge/tests-622%20passed-brightgreen?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
 
 ---
@@ -63,7 +63,7 @@ Scrapers break constantly. Selectors rot when sites redesign. The usual fix: som
 - 🧵 Async task queue (Procrastinate) embedded in the FastAPI lifespan; no separate worker service required on Render's free tier.
 - 🔎 FastAPI API — viewer endpoints (`/sources`, `/runs`, `/heals`) + custom-source CRUD (`/api/sources`) + async enqueue (`/api/scrape/{source}/enqueue`).
 - ⏰ GitHub Actions: CI + hourly scrape dispatch (each source on its own `schedule` cron) + heal-on-failure.
-- 🧪 603 tests (601 run, 2 live-smoke tests skip without `SMOKE_BASE_URL`), mypy strict, ruff clean.
+- 🧪 624 tests (622 run, 2 live-smoke tests skip without `SMOKE_BASE_URL`), mypy strict, ruff clean.
 - 📦 7 shipped configs: hackernews, arxiv-cs, lobsters, huggingface-papers, github-trending, producthunt-today, wikipedia-current-events.
 
 ---
@@ -249,6 +249,7 @@ Dockerfile                     # Image with chromium + non-root user + HEALTHCHE
 | `GET` | `/health` | Health check (200 OK, **503 when DB is down**) |
 | `GET` | `/version` | Package semver as `version`; commit SHA as `commit_sha` (`COMMIT_SHA` build arg, else Render's `RENDER_GIT_COMMIT`) |
 | `GET` | `/metrics` | Prometheus exposition (`prometheus-fastapi-instrumentator`, excluded from the OpenAPI schema) |
+| `GET` | `/_slowquery/queries?request_id=R` | Queries request `R` (sent with `X-Request-Id: R`) caused, from [slowquery-detective](https://pypi.org/project/slowquery-detective/) 0.2, stored in schema `slowquery` of magpie's own database; bastion tokens only (spec 11) |
 
 ### Custom sources (runtime config management)
 
@@ -399,7 +400,7 @@ README unnoticed.
 
 | Metric | Value |
 |---|---|
-| **Test count** | 603 tests (601 pass locally and in CI; the 2 live-smoke tests run only in the push-gated `smoke` job) |
+| **Test count** | 624 tests (622 pass locally and in CI; the 2 live-smoke tests run only in the push-gated `smoke` job) |
 | **Type discipline** | mypy strict clean, no `Any` leaking across module boundaries |
 | **Linting** | ruff check + ruff format clean |
 | **Config validation** | 35 tests (XPath, CSS, selector compile-check, cross-field validators) |
