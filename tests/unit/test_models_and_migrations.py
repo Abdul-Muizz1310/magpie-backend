@@ -200,6 +200,15 @@ class TestAlembicMigration:
 
         healer_log = logging.getLogger("magpie.healer")
         monkeypatch.setattr(healer_log, "disabled", False)
+        # slowquery-detective's loggers (spec 11) exist before any migration runs too.
+        import slowquery_detective  # noqa: F401  (creates the slowquery.* loggers)
+
+        library_logs = [
+            logging.getLogger(name)
+            for name in ("slowquery.middleware", "slowquery.runtime", "slowquery.router")
+        ]
+        for library_log in library_logs:
+            monkeypatch.setattr(library_log, "disabled", False)
         db_file = tmp_path / "alembic_loggers.db"
         monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_file}")
         cfg = Config(str(REPO_ROOT / "alembic.ini"))
@@ -211,3 +220,4 @@ class TestAlembicMigration:
         finally:
             os.chdir(cwd)
         assert healer_log.disabled is False
+        assert [lg.name for lg in library_logs if lg.disabled] == []

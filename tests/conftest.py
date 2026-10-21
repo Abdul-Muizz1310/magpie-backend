@@ -15,6 +15,11 @@ import os
 # behaviour is covered in tests/unit/test_rate_limit.py with an explicit limit.
 # Must run before any test module imports ``magpie.main``.
 os.environ["RATE_LIMIT_PER_MINUTE"] = "0"
+# The contract-v2 "test settings" (spec 10): with no trusted key configured, the
+# shared app lets requests through instead of answering 503, so router tests need
+# no tokens. Tests that need production behaviour build their own app with
+# ``PlatformAuthSettings(test_settings=False)``.
+os.environ["APP_ENV"] = "test"
 
 from collections.abc import AsyncIterator
 

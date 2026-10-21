@@ -45,19 +45,23 @@ services:
       # "unknown" placeholder — so /version reports the deployed SHA here with no
       # extra envVars entry. Builders that *can* pass --build-arg (CI, local
       # `docker build`) bake COMMIT_SHA directly and take precedence.
-      # Auth posture for the live deployment. DEMO_MODE=false means the
-      # X-Platform-Token middleware enforces platform tokens whenever a public
-      # key is configured (BASTION_SIGNING_KEY_PUBLIC, BASTION_PUBLIC_KEY_URL or
-      # MAGPIE_FRONTEND_SIGNING_KEY_PUBLIC). Leaving it unset now also fails closed in code,
-      # but we set it explicitly so the intent is visible (02 unauth finding).
+      # Auth posture (platform contract v2, docs/specs/10-platform-contract-v2.md).
+      # DEMO_MODE=false: a request without a platform token is 401. true only
+      # lets a *missing* token through anonymous; an invalid token is always 401.
+      # With no trusted key (BASTION_SIGNING_KEY_PUBLIC, BASTION_PUBLIC_KEY_URL
+      # or MAGPIE_FRONTEND_SIGNING_KEY_PUBLIC) every non-public route answers
+      # 503. Unset DEMO_MODE is false in code; set here so the intent is visible.
       - key: DEMO_MODE
         value: "false"
       - key: BASTION_SIGNING_KEY_PUBLIC
         sync: false
-      # magpie-frontend's own Ed25519 public key (base64 SPKI DER), trusted only for role "frontend".
+      # magpie-frontend's own Ed25519 public key (base64 SPKI DER), trusted only for
+      # iss "magpie-frontend" with role "frontend".
       - key: MAGPIE_FRONTEND_SIGNING_KEY_PUBLIC
         sync: false
-      # Per-IP rate limit for mutating/scrape/enqueue routes (requests/minute).
+      # Rate limit for mutating/scrape/enqueue routes (requests/minute): per
+      # "bastion:{sub}" for bastion tokens, per "magpie-frontend:{address}" for
+      # the frontend's, else per forwarded client address.
       - key: RATE_LIMIT_PER_MINUTE
         value: "30"
       - key: FRONTEND_URL
