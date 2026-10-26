@@ -34,8 +34,8 @@ When a scrape returns fewer items than `health.min_items`, automatically attempt
 - LLM response must be valid JSON matching `{selector, confidence, reasoning, sample_values}`
 - Proposed selector must extract >= 1 item from the re-fetched HTML to be accepted
 - If selector is null or extracts 0 items, no PR is created (error logged)
-- LLM call uses OpenRouter with the model from `OPENROUTER_MODEL_PRIMARY` (defaults to the free-tier slug in code, never a paid model)
-- On transient LLM errors (429/5xx) the fixer retries up to 3 times with exponential backoff, honouring `Retry-After` on 429
+- LLM call uses OpenRouter, cascading PRIMARY → FAST → FALLBACK (`OPENROUTER_MODEL_*`, each defaulting to a free-tier slug in code, never a paid model); see "The cascade (2026-10-26)"
+- On a transient error (429, 5xx, a timeout, a dropped connection, or OpenRouter's error object inside a 200 with such a code) a model is retried once after a backoff, honouring `Retry-After` on 429, then the next model is asked; any other failure asks the next model at once
 - Before prompting, the page HTML is stripped of `<script>`/`<style>`/comments and windowed around the broken selector so large pages don't blind the LLM
 - LLM prompt is currently built inline in `selector_fixer._call_llm` (a `healer/prompts/` file is not yet used)
 - PR branch name: `heal/<source-name>` (idempotent — one heal branch/PR per source, updated in place rather than spamming new PRs)
@@ -89,6 +89,37 @@ The code default is the portfolio's primary free model, `google/gemma-4-26b-a4b-
 withdrawn from OpenRouter: every heal call answered 404 and every heal job still reported success.
 `render.yaml` and `heal-on-failure.yml` set `OPENROUTER_MODEL_PRIMARY` to the same slug, and a test
 holds the three equal so a later swap has to change all of them.
+
+Since the cascade (2026-10-26) the same holds for FAST, `xingchen-agi/xing4.0-29b-a4b:free`
+(`DEFAULT_FAST_MODEL`), and FALLBACK, `dots-studio/dots-3-note-preview:free`
+(`DEFAULT_FALLBACK_MODEL`): paper-trail's slugs, each smoke-tested with JSON mode that day, on three
+upstream providers.
+
+## The cascade (2026-10-26)
+
+`convention-llm-usage` asks every LLM caller to cascade PRIMARY → FAST → FALLBACK on a 429 or a 5xx.
+The fixer asked only PRIMARY, three times: on 2026-10-26 a production heal of `demo-broken` failed
+because Google AI Studio answered every attempt for both targets with 429 (and once 504), while the
+other two portfolio models were up. The Langfuse trace of that heal showed it in one look.
+
+- **Order.** PRIMARY, then FAST, then FALLBACK, read from `OPENROUTER_MODEL_PRIMARY`, `_FAST` and
+  `_FALLBACK`; a blank or unset variable takes its code default. A slug already in the cascade is not
+  asked twice.
+- **Attempts.** Each model gets `ATTEMPTS_PER_MODEL` = 2 attempts. Only a transient failure (429, 5xx,
+  a timeout, a dropped connection, an error object in a 200 whose code is 429 or 5xx) earns the second,
+  after `RETRY_BASE_DELAY_S` = 2 s (or the 429's `Retry-After`). Anything else (another 4xx, a reply
+  that is not the proposal JSON) asks the next model at once. A target costs at most 6 calls.
+- **Exhaustion.** When every model failed, `fix_selector` raises `ModelsExhaustedError` naming each
+  tier's last failure (`primary=rate_limited: status=429; fast=…; fallback=…`); the heal records
+  `LLM error: ModelsExhaustedError: …` for the target.
+
+Cases (`tests/unit/test_selector_fixer.py`, `tests/unit/test_selector_fixer_llm.py`):
+- [x] PRIMARY 429 twice → FAST answers; calls PRIMARY, PRIMARY, FAST; one backoff sleep.
+- [x] PRIMARY answers a reply that is not the proposal JSON → FAST at once, no sleep.
+- [x] Every model 503 → `ModelsExhaustedError` naming all three tiers after 6 calls; one 2 s sleep per model.
+- [x] Every model 429 with `Retry-After: 7` → one 7 s sleep per model.
+- [x] FAST and FALLBACK set to PRIMARY's slug → that model is asked once (2 attempts), then the error.
+- [x] Blank or unset `OPENROUTER_MODEL_FAST`/`_FALLBACK` → the free code defaults; set → honoured.
 
 ## A heal ends healed or failed, never silent (2026-10-20)
 

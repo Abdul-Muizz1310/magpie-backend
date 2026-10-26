@@ -63,7 +63,8 @@ generation wrapping the retries):
 
 - `model`: the slug asked (`OPENROUTER_MODEL_PRIMARY`, else `DEFAULT_MODEL`).
 - `model_parameters`: `{temperature: 0.1, response_format: "json_object"}`.
-- `metadata`: `attempt` (1-based, of `MAX_RETRIES`), `provider` (OpenRouter's upstream provider,
+- `metadata`: `tier` (`primary|fast|fallback`, spec 03 "The cascade"), `attempt` (1-based, of
+  `ATTEMPTS_PER_MODEL`, counted per model), `provider` (OpenRouter's upstream provider,
   when reported).
 - `usage_details`, from OpenRouter's `usage`, as **exclusive** buckets (Langfuse adds buckets up):
   `input = prompt_tokens − cached_tokens`, `input_cached_tokens` (when > 0),

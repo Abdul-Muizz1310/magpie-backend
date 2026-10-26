@@ -115,7 +115,8 @@ def _in_order(*responses: httpx.Response) -> Callable[[httpx.Request], httpx.Res
 @pytest.fixture(autouse=True)
 def _llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.delenv("OPENROUTER_MODEL_PRIMARY", raising=False)
+    for slot in ("PRIMARY", "FAST", "FALLBACK"):
+        monkeypatch.delenv(f"OPENROUTER_MODEL_{slot}", raising=False)
     # Retries back off by RETRY_BASE_DELAY_S * 2^n: zero, so no test sleeps.
     monkeypatch.setattr(selector_fixer, "RETRY_BASE_DELAY_S", 0.0)
 
@@ -317,7 +318,7 @@ async def test_t5_an_answered_attempt_is_one_generation(traces: Traces) -> None:
         "output_reasoning_tokens": 10,
     }
     assert traces.decoded(gen, "langfuse.observation.cost_details") == {"total": 0.0}
-    assert traces.metadata(gen) == {"attempt": 2, "provider": "Google AI Studio"}
+    assert traces.metadata(gen) == {"tier": "primary", "attempt": 2, "provider": "Google AI Studio"}
 
 
 async def test_t5_reasoning_is_kept_on_the_output(traces: Traces) -> None:
@@ -330,7 +331,7 @@ async def test_t5_reasoning_is_kept_on_the_output(traces: Traces) -> None:
         await _call_llm(field_name="t", old_selector="s", html="<html></html>", old_samples=[])
     out = traces.decoded(traces.one("propose-selector"), OUTPUT)
     assert out["reasoning"] == "look first"
-    assert traces.metadata(traces.one("propose-selector")) == {"attempt": 1}
+    assert traces.metadata(traces.one("propose-selector")) == {"tier": "primary", "attempt": 1}
 
 
 @pytest.mark.parametrize(
@@ -367,7 +368,7 @@ async def test_t6_a_retried_attempt_is_its_own_error_generation(traces: Traces) 
     first, second = traces.named("propose-selector")
     assert traces.level(first) == "ERROR"
     assert traces.status_message(first) == "rate_limited: status=429"
-    assert traces.metadata(first) == {"attempt": 1}
+    assert traces.metadata(first) == {"tier": "primary", "attempt": 1}
     assert traces.level(second) == "DEFAULT"
     assert traces.metadata(second)["attempt"] == 2
 
@@ -430,7 +431,7 @@ async def test_t6_an_error_inside_a_200_is_filed_under_its_code(traces: Traces) 
     assert traces.decoded(first, OUTPUT) == {
         "error": {"code": 429, "message": "Rate limit exceeded"}
     }
-    assert traces.metadata(first) == {"attempt": 1, "provider": "Phala"}
+    assert traces.metadata(first) == {"tier": "primary", "attempt": 1, "provider": "Phala"}
     assert traces.level(second) == "DEFAULT"
 
 
@@ -452,20 +453,36 @@ async def test_t6_a_rejected_reply_is_still_on_the_generation(traces: Traces) ->
     }
 
 
-async def test_t6_three_failures_are_three_error_generations(traces: Traces) -> None:
+async def test_t6_every_model_failing_is_one_error_generation_per_attempt(
+    traces: Traces,
+) -> None:
+    statuses = (500, 502, 503, 504, 500, 502)
     with (
-        openrouter(_in_order(httpx.Response(500), httpx.Response(502), httpx.Response(503))),
-        pytest.raises(httpx.HTTPStatusError),
+        openrouter(_in_order(*(httpx.Response(code) for code in statuses))),
+        pytest.raises(selector_fixer.ModelsExhaustedError),
     ):
         await fix_selector(
             field_name="title", old_selector="s", html="<html></html>", old_samples=[]
         )
     gens = traces.named("propose-selector")
-    assert [traces.metadata(g)["attempt"] for g in gens] == [1, 2, 3]
+    assert [(traces.metadata(g)["tier"], traces.metadata(g)["attempt"]) for g in gens] == [
+        ("primary", 1),
+        ("primary", 2),
+        ("fast", 1),
+        ("fast", 2),
+        ("fallback", 1),
+        ("fallback", 2),
+    ]
+    assert [traces.attr(g, "langfuse.observation.model.name") for g in gens] == [
+        selector_fixer.DEFAULT_MODEL,
+        selector_fixer.DEFAULT_MODEL,
+        selector_fixer.DEFAULT_FAST_MODEL,
+        selector_fixer.DEFAULT_FAST_MODEL,
+        selector_fixer.DEFAULT_FALLBACK_MODEL,
+        selector_fixer.DEFAULT_FALLBACK_MODEL,
+    ]
     assert [traces.status_message(g) for g in gens] == [
-        "server_error: status=500",
-        "server_error: status=502",
-        "server_error: status=503",
+        f"server_error: status={code}" for code in statuses
     ]
 
 
@@ -655,7 +672,7 @@ async def test_t10_a_model_that_never_answers_is_an_llm_error(
     name = await _seed(session_factory, BROKEN_CONTAINER_YAML, SourceOrigin.api)
     with (
         patch("magpie.healer.apply._fetch_html", new=AsyncMock(return_value=ITEM_HTML)),
-        openrouter(_in_order(httpx.Response(500), httpx.Response(500), httpx.Response(500))),
+        openrouter(_in_order(*(httpx.Response(500) for _ in range(6)))),
     ):
         summary = await heal_source(
             source=name, run_id=None, session_factory=session_factory, trigger="worker"
@@ -663,9 +680,11 @@ async def test_t10_a_model_that_never_answers_is_an_llm_error(
     assert not summary.succeeded
     step = traces.one("heal-selector")
     assert traces.level(step) == "ERROR"
-    assert str(traces.status_message(step)).startswith("LLM error: HTTPStatusError")
+    assert str(traces.status_message(step)).startswith(
+        "LLM error: ModelsExhaustedError: primary=server_error: status=500"
+    )
     gens = traces.children(step)
-    assert _names(gens) == ["propose-selector"] * 3
+    assert _names(gens) == ["propose-selector"] * 6
     assert {traces.level(g) for g in gens} == {"ERROR"}
     assert traces.level(traces.one("heal-source")) == "ERROR"
 

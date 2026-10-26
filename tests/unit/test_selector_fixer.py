@@ -3,10 +3,18 @@
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 from magpie.healer.detector import should_heal
-from magpie.healer.selector_fixer import fix_selector
+from magpie.healer.selector_fixer import (
+    DEFAULT_FALLBACK_MODEL,
+    DEFAULT_FAST_MODEL,
+    DEFAULT_MODEL,
+    ModelsExhaustedError,
+    cascade,
+    fix_selector,
+)
 from magpie.healer.validator import validate_selector
 
 FIXTURES = Path(__file__).resolve().parent.parent.parent / "fixtures"
@@ -92,18 +100,18 @@ class TestSelectorFixer:
             assert result["selector"] is None
 
     @pytest.mark.asyncio
-    async def test_llm_returns_invalid_json_retries(self) -> None:
-        call_count = 0
+    async def test_llm_returns_invalid_json_asks_the_next_model(self) -> None:
+        """A reply that is not the proposal is not transient: the next model, no sleep (spec 03)."""
+        tiers: list[str] = []
 
         async def flaky_llm(*args: object, **kwargs: object) -> dict:
-            nonlocal call_count
-            call_count += 1
-            if call_count < 3:
+            tiers.append(str(kwargs["tier"]))
+            if len(tiers) < 3:
                 raise ValueError("Invalid JSON from LLM")
             return {
                 "selector": "span.storylink > a",
                 "confidence": 0.85,
-                "reasoning": "Found after retry",
+                "reasoning": "Found by the fallback",
                 "sample_values": [],
             }
 
@@ -123,57 +131,75 @@ class TestSelectorFixer:
                 old_samples=[],
             )
             assert result is not None
-            assert call_count == 3
-            # Two failures before the success -> two backoff sleeps.
-            assert sleep.await_count == 2
+            assert tiers == ["primary", "fast", "fallback"]
+            assert sleep.await_count == 0
 
     @pytest.mark.asyncio
-    async def test_retry_uses_exponential_backoff(self) -> None:
-        """All-failing attempts sleep with growing delays before re-raising (spec 03)."""
+    async def test_a_transient_error_is_retried_once_then_cascades(self) -> None:
+        """PRIMARY 429 twice -> FAST answers; one backoff sleep (spec 03, The cascade)."""
+        calls: list[tuple[str, int]] = []
+        request = httpx.Request("POST", "http://x")
+        err = httpx.HTTPStatusError(
+            "rate limited", request=request, response=httpx.Response(429, request=request)
+        )
 
-        async def always_fails(*args: object, **kwargs: object) -> dict:
-            raise ValueError("boom")
+        async def llm(*args: object, **kwargs: object) -> dict:
+            calls.append((str(kwargs["tier"]), int(str(kwargs["attempt"]))))
+            if kwargs["tier"] == "primary":
+                raise err
+            return {"selector": "a", "confidence": 0.9, "reasoning": "r", "sample_values": []}
 
         with (
             patch(
-                "magpie.healer.selector_fixer._call_llm",
-                new_callable=AsyncMock,
-                side_effect=always_fails,
+                "magpie.healer.selector_fixer._call_llm", new_callable=AsyncMock, side_effect=llm
             ),
             patch("magpie.healer.selector_fixer.asyncio.sleep", new_callable=AsyncMock) as sleep,
-            pytest.raises(ValueError),
+        ):
+            result = await fix_selector(
+                field_name="title", old_selector="div::text", html="<html></html>", old_samples=[]
+            )
+        assert result is not None
+        assert calls == [("primary", 1), ("primary", 2), ("fast", 1)]
+        assert [call.args[0] for call in sleep.await_args_list] == [2.0]
+
+    @pytest.mark.asyncio
+    async def test_every_model_failing_raises_naming_each_tier(self) -> None:
+        """Every model 503 -> six calls, a 2 s sleep per model, then ModelsExhaustedError."""
+        request = httpx.Request("POST", "http://x")
+        err = httpx.HTTPStatusError(
+            "down", request=request, response=httpx.Response(503, request=request)
+        )
+        mock = AsyncMock(side_effect=err)
+        with (
+            patch("magpie.healer.selector_fixer._call_llm", new=mock),
+            patch("magpie.healer.selector_fixer.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            pytest.raises(ModelsExhaustedError) as exc,
         ):
             await fix_selector(
-                field_name="title",
-                old_selector="div::text",
-                html="<html></html>",
-                old_samples=[],
+                field_name="title", old_selector="div::text", html="<html></html>", old_samples=[]
             )
-        delays = [call.args[0] for call in sleep.await_args_list]
-        # MAX_RETRIES=3 -> two inter-attempt sleeps, doubling each time.
-        assert delays == [2.0, 4.0]
+        assert mock.await_count == 6
+        assert [call.args[0] for call in sleep.await_args_list] == [2.0, 2.0, 2.0]
+        assert str(exc.value) == (
+            "primary=server_error: status=503; fast=server_error: status=503; "
+            "fallback=server_error: status=503"
+        )
 
     @pytest.mark.asyncio
     async def test_retry_honours_retry_after_on_429(self) -> None:
-        """A 429 with a Retry-After header waits exactly that many seconds."""
-        import httpx
-
+        """A 429 with a Retry-After header waits exactly that long, once per model."""
         resp = httpx.Response(
             429, headers={"retry-after": "7"}, request=httpx.Request("POST", "http://x")
         )
         err = httpx.HTTPStatusError("rate limited", request=resp.request, response=resp)
-
-        async def rate_limited(*args: object, **kwargs: object) -> dict:
-            raise err
-
         with (
             patch(
                 "magpie.healer.selector_fixer._call_llm",
                 new_callable=AsyncMock,
-                side_effect=rate_limited,
+                side_effect=err,
             ),
             patch("magpie.healer.selector_fixer.asyncio.sleep", new_callable=AsyncMock) as sleep,
-            pytest.raises(httpx.HTTPStatusError),
+            pytest.raises(ModelsExhaustedError),
         ):
             await fix_selector(
                 field_name="title",
@@ -182,7 +208,23 @@ class TestSelectorFixer:
                 old_samples=[],
             )
         delays = [call.args[0] for call in sleep.await_args_list]
-        assert delays == [7.0, 7.0]
+        assert delays == [7.0, 7.0, 7.0]
+
+    def test_cascade_reads_each_slot_and_asks_a_slug_once(self) -> None:
+        assert cascade({}) == [
+            ("primary", DEFAULT_MODEL),
+            ("fast", DEFAULT_FAST_MODEL),
+            ("fallback", DEFAULT_FALLBACK_MODEL),
+        ]
+        assert cascade(
+            {"OPENROUTER_MODEL_FAST": "  ", "OPENROUTER_MODEL_FALLBACK": "v/fallback:free"}
+        ) == [
+            ("primary", DEFAULT_MODEL),
+            ("fast", DEFAULT_FAST_MODEL),
+            ("fallback", "v/fallback:free"),
+        ]
+        same = {"OPENROUTER_MODEL_FAST": DEFAULT_MODEL, "OPENROUTER_MODEL_FALLBACK": DEFAULT_MODEL}
+        assert cascade(same) == [("primary", DEFAULT_MODEL)]
 
     @pytest.mark.asyncio
     async def test_html_stripped_and_truncated(self) -> None:
