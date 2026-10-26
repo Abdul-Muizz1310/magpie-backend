@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -30,7 +31,7 @@ from magpie.core.safe_fetch import safe_get_async
 from magpie.healer.github_pr import create_heal_pr
 from magpie.healer.outcome import SOURCE_TARGET, HealedTarget, HealFailure, HealSummary
 from magpie.healer.selector_fixer import fix_selector
-from magpie.healer.validator import validate_selector
+from magpie.healer.validator import InvalidSelectorError, validate_selector
 from magpie.scrapy.factory import USER_AGENT, _extract_items_from_html
 from magpie.storage.heals_repo import HealsRepository
 from magpie.storage.models import HealMode, SourceOrigin
@@ -302,18 +303,38 @@ async def _heal_target(
         return new_config
 
 
-def _check_selector(html: str, selector: str, selector_type: SelectorType) -> list[str]:
+@dataclass(frozen=True)
+class _Check:
+    """What ``validate-selector`` found: the matches, or why the selector does not compile."""
+
+    samples: list[str]
+    invalid: str | None = None
+
+
+def _check_selector(html: str, selector: str, selector_type: SelectorType) -> _Check:
     """``validate_selector`` as the trace's ``validate-selector`` evaluator.
 
-    It scores the model's output against the live page; a rejection is its output
-    (``accepted: false``), not an error of the check.
+    It scores the model's output against the live page; a rejection, a selector that
+    does not compile included, is its output (``accepted: false``), not an error of
+    the check.
     """
     with tracing.client().start_as_current_observation(
         as_type="evaluator",
         name="validate-selector",
         input={"selector": selector, "selector_type": selector_type},
     ) as check:
-        samples = validate_selector(html, selector, selector_type)
+        try:
+            samples = validate_selector(html, selector, selector_type)
+        except InvalidSelectorError as exc:
+            check.update(
+                output={
+                    "accepted": False,
+                    "match_count": 0,
+                    "sample_values": [],
+                    "invalid": str(exc),
+                }
+            )
+            return _Check(samples=[], invalid=str(exc))
         check.update(
             output={
                 "accepted": bool(samples),
@@ -321,7 +342,7 @@ def _check_selector(html: str, selector: str, selector_type: SelectorType) -> li
                 "sample_values": [value[:200] for value in samples[:3]],
             }
         )
-        return samples
+        return _Check(samples=samples)
 
 
 async def _attempt_target(
@@ -374,8 +395,8 @@ async def _attempt_target(
         return None
 
     new_selector = str(proposal["selector"])
-    samples = _check_selector(html, new_selector, selector_type)
-    if not samples:
+    check = _check_selector(html, new_selector, selector_type)
+    if not check.samples:
         await _record_heal(
             session_factory=session_factory,
             source_id=source_id,
@@ -391,11 +412,8 @@ async def _attempt_target(
             pr_url=None,
             applied=False,
         )
-        outcome.fail(
-            source_name,
-            target,
-            f"selector rejected: {new_selector!r} matches nothing on the live page",
-        )
+        why = check.invalid or f"{new_selector!r} matches nothing on the live page"
+        outcome.fail(source_name, target, f"selector rejected: {why}")
         return None
 
     pr_url: str | None = None
