@@ -105,20 +105,43 @@ class _Choice(BaseModel):
     message: _Message
 
 
+class _ReplyError(BaseModel):
+    """OpenRouter's error object, which can come back inside a 200 instead of a completion."""
+
+    code: _Count = None
+    message: _Text = None
+
+
 class _Reply(BaseModel):
     """The part of an OpenRouter chat completion the fixer reads."""
 
     provider: _Text = None
-    choices: list[_Choice] = Field(min_length=1)
+    choices: list[_Choice] = []
     usage: Annotated[_Usage | None, BeforeValidator(_mapping_or_none)] = None
+    error: Annotated[_ReplyError | None, BeforeValidator(_mapping_or_none)] = None
+
+
+class _UpstreamError(Exception):
+    """OpenRouter answered 200 with its error object (spec 12): retried like any failure."""
+
+    def __init__(self, error: _ReplyError) -> None:
+        super().__init__(f"status={error.code}: {error.message}")
+        self.code = error.code
+
+
+def _status_stage(code: int) -> str:
+    return "rate_limited" if code == 429 else "server_error" if code >= 500 else "client_error"
 
 
 def _failure_stage(error: Exception) -> str:
     """The stage a failed attempt is filed under on its generation (spec 12)."""
     if isinstance(error, httpx.HTTPStatusError):
         code = error.response.status_code
-        stage = "rate_limited" if code == 429 else "server_error" if code >= 500 else "client_error"
-        return f"{stage}: status={code}"
+        return f"{_status_stage(code)}: status={code}"
+    if isinstance(error, _UpstreamError):
+        if error.code is None:
+            return "upstream_error: in the reply body"
+        return f"{_status_stage(error.code)}: status={error.code} in the reply body"
     if isinstance(error, httpx.TimeoutException):
         return "timeout"
     if isinstance(error, httpx.HTTPError):
@@ -307,6 +330,15 @@ async def _call_llm(
                 )
                 resp.raise_for_status()
             reply = _Reply.model_validate(resp.json())
+            if reply.error is not None:
+                generation.update(
+                    output={"error": reply.error.model_dump()},
+                    metadata={"provider": reply.provider} if reply.provider else None,
+                )
+                raise _UpstreamError(reply.error)
+            if not reply.choices:
+                msg = "the reply has no choices"
+                raise ValueError(msg)
             content = reply.choices[0].message.content
             if content is None or not content.strip():
                 msg = "the reply has no completion"
