@@ -236,3 +236,50 @@ def test_heal_workflow_pins_the_code_default_model() -> None:
     heal_steps = jobs["heal"]["steps"]
     healer_step = next(s for s in heal_steps if "magpie.healer.run" in str(s.get("run", "")))
     assert healer_step["env"][_MODEL_ENV] == DEFAULT_MODEL
+
+
+# ── Langfuse: one project and one region everywhere a heal runs (spec 12) ───
+
+_LANGFUSE_KEYS = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
+_LANGFUSE_URL = "LANGFUSE_BASE_URL"
+
+
+def _heal_step_env() -> dict[str, object]:
+    jobs = _workflow(HEAL_WORKFLOW)["jobs"]
+    assert isinstance(jobs, dict)
+    step = next(s for s in jobs["heal"]["steps"] if "magpie.healer.run" in str(s.get("run", "")))
+    env = step["env"]
+    assert isinstance(env, dict)
+    return env
+
+
+def _blueprint_env() -> list[dict[str, object]]:
+    blueprint = yaml.safe_load(RENDER_BLUEPRINT.read_text(encoding="utf-8"))
+    return [entry for service in blueprint["services"] for entry in service["envVars"]]
+
+
+def test_heal_workflow_traces_to_langfuse_as_production() -> None:
+    """The heal job runs in GitHub Actions: without the keys its heals are never traced.
+
+    The keys come from repository secrets; ``APP_ENV`` is the trace environment, so
+    without it the job's traces would land in ``development``.
+    """
+    env = _heal_step_env()
+    for key in _LANGFUSE_KEYS:
+        assert env[key] == f"${{{{ secrets.{key} }}}}", key
+    assert env["APP_ENV"] == "production"
+
+
+def test_heal_workflow_and_blueprint_name_one_langfuse_region() -> None:
+    """Unset, the SDK sends to the EU region; the project lives on US Cloud.
+
+    render.yaml declares the keys as dashboard secrets (``sync: false``, no value)
+    and pins the same base URL the heal job uses.
+    """
+    blueprint = {str(entry["key"]): entry for entry in _blueprint_env()}
+    for key in _LANGFUSE_KEYS:
+        assert blueprint[key].get("sync") is False, key
+        assert "value" not in blueprint[key], key
+    url = blueprint[_LANGFUSE_URL]["value"]
+    assert url == "https://us.cloud.langfuse.com"
+    assert _heal_step_env()[_LANGFUSE_URL] == url
