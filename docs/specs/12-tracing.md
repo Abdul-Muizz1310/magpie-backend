@@ -44,7 +44,7 @@ filters target them); run-specific values live in metadata, never in a name.
 | live page fetch | `tool` | `fetch-page` | `{url, render}` | `{char_count}` |
 | one broken target (container or field) | `agent` | `heal-selector` | `{target, old_selector, selector_type, mode}` | healed: `{healed: true, new_selector, mode, pr_url, applied}`; not: `{healed: false, reason}` |
 | each model attempt | `generation` | `propose-selector` | the chat messages | `{role: "assistant", content[, reasoning]}` |
-| proposal check | `evaluator` | `validate-selector` | `{selector, selector_type}` | `{accepted, match_count, sample_values}` (the first three matches, each cut to 200 characters) |
+| proposal check | `evaluator` | `validate-selector` | `{selector, selector_type}` | `{accepted, match_count, sample_values}` (the first three matches, each cut to 200 characters), plus `invalid` (why) when the selector does not compile |
 | file-origin fix | `tool` | `open-heal-pr` | `{source, target, file_path, new_selector}` | `{pr_url}` |
 | api-origin fix | `tool` | `patch-source-config` | `{source, target, new_selector}` | `{applied: true}` |
 
@@ -140,7 +140,9 @@ Fast tier (`tests/unit/test_tracing.py`, a client on an in-memory exporter — n
 - **T8** a file-origin field heal whose PR opens → `open-heal-pr` with the PR URL; the trace is
   `DEFAULT` throughout.
 - **T9** a proposal that matches nothing → `validate-selector` output `accepted: false`;
-  `heal-selector` and `heal-source` `ERROR` with `selector rejected: …`.
+  `heal-selector` and `heal-source` `ERROR` with `selector rejected: …`. A proposal that does not
+  compile (`div[`) → `validate-selector` stays `DEFAULT` (a rejection is its output, not its error)
+  with `accepted: false` and `invalid`; the heal returns its summary instead of raising.
 - **T10** the model failing every attempt → `heal-selector` and `heal-source` `ERROR` with
   `LLM error: …`; three `ERROR` generations beneath.
 - **T11** file-origin, the PR call returns nothing → `open-heal-pr` and `heal-selector` `ERROR`

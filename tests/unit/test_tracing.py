@@ -624,6 +624,31 @@ async def test_t9_a_selector_that_matches_nothing_is_rejected(
     assert [k.name for k in traces.children(step)] == ["propose-selector", "validate-selector"]
 
 
+async def test_t9_a_selector_that_does_not_compile_is_a_rejection_not_an_error(
+    traces: Traces, session_factory: Any
+) -> None:
+    name = await _seed(session_factory, BROKEN_CONTAINER_YAML, SourceOrigin.api)
+    with (
+        patch("magpie.healer.apply._fetch_html", new=AsyncMock(return_value=ITEM_HTML)),
+        openrouter(_in_order(_ok("div["))),
+    ):
+        summary = await heal_source(
+            source=name, run_id=None, session_factory=session_factory, trigger="worker"
+        )
+    assert not summary.succeeded
+    check = traces.one("validate-selector")
+    assert traces.level(check) == "DEFAULT"
+    output = traces.decoded(check, OUTPUT)
+    assert output["accepted"] is False
+    assert output["match_count"] == 0
+    assert output["invalid"].startswith("'div[' is not a valid CSS selector")
+    step = traces.one("heal-selector")
+    assert traces.level(step) == "ERROR"
+    assert str(traces.status_message(step)).startswith(
+        "selector rejected: 'div[' is not a valid CSS selector"
+    )
+
+
 async def test_t10_a_model_that_never_answers_is_an_llm_error(
     traces: Traces, session_factory: Any
 ) -> None:

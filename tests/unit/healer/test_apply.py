@@ -181,6 +181,45 @@ class TestHealApplyRejectsInvalidProposal:
             assert len(heals) == 1
             assert heals[0].applied is False
 
+    async def test_proposal_that_does_not_compile_is_rejected_not_raised(
+        self, session_factory
+    ) -> None:
+        await _seed(session_factory, SourceOrigin.api, name="malformed")
+
+        with (
+            patch(
+                "magpie.healer.apply._fetch_html",
+                new=AsyncMock(return_value=HTML_WITH_TITLE_ONLY),
+            ),
+            patch(
+                "magpie.healer.apply.fix_selector",
+                new=AsyncMock(
+                    return_value={
+                        "selector": "div[",
+                        "confidence": 0.4,
+                        "reasoning": "half a selector",
+                        "sample_values": [],
+                    }
+                ),
+            ),
+        ):
+            result = await heal_source(
+                source="malformed",
+                run_id=None,
+                session_factory=session_factory,
+                trigger="worker",
+            )
+
+        assert result.healed == ()
+        assert [f.target for f in result.failures] == ["title"]
+        reason = result.failures[0].reason
+        assert reason.startswith("selector rejected: 'div[' is not a valid CSS selector")
+        async with session_factory() as session:
+            row = await SourcesRepository(session).get_by_name("malformed")
+            assert row is not None
+            heals = await HealsRepository(session).list_for_source(row.id)
+            assert [(h.new_selector, h.applied) for h in heals] == [("div[", False)]
+
     async def test_no_healing_needed_when_selector_still_matches(self, session_factory) -> None:
         working_yaml = """\
 name: still-working
