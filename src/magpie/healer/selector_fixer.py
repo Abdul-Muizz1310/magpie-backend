@@ -1,16 +1,27 @@
-"""LLM-powered selector fixer for broken scrapers."""
+"""LLM-powered selector fixer for broken scrapers.
+
+Every OpenRouter attempt is one Langfuse generation, ``propose-selector``
+(docs/specs/12-tracing.md): the model it asked, the prompt, the reply, token usage
+and cost, and level ERROR naming the stage when the attempt failed.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import math
 import os
 import re
-from typing import Any
+from collections.abc import Mapping
+from typing import Annotated, Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from langfuse import LangfuseGeneration
+from langfuse.api import MapValue
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+
+from magpie.core import tracing
 
 log = logging.getLogger("magpie.healer.selector_fixer")
 
@@ -40,6 +51,101 @@ class _LLMSelectorProposal(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
     sample_values: list[str] = []
+
+
+def _count(value: object) -> int | None:
+    """A token count OpenRouter reported, or ``None`` unless it is a non-negative int."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _cost(value: object) -> float | None:
+    """A cost OpenRouter reported, or ``None`` unless it is a finite, non-negative number."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    cost = float(value)
+    return cost if math.isfinite(cost) and cost >= 0 else None
+
+
+def _mapping_or_none(value: object) -> object:
+    return value if isinstance(value, Mapping) else None
+
+
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+_Count = Annotated[int | None, BeforeValidator(_count)]
+_Cost = Annotated[float | None, BeforeValidator(_cost)]
+_Text = Annotated[str | None, BeforeValidator(_str_or_none)]
+
+
+class _Details(BaseModel):
+    cached_tokens: _Count = None
+    reasoning_tokens: _Count = None
+
+
+class _Usage(BaseModel):
+    """Telemetry only: a field that does not read is dropped, never fatal to the call."""
+
+    prompt_tokens: _Count = None
+    completion_tokens: _Count = None
+    cost: _Cost = None
+    prompt_tokens_details: Annotated[_Details | None, BeforeValidator(_mapping_or_none)] = None
+    completion_tokens_details: Annotated[_Details | None, BeforeValidator(_mapping_or_none)] = None
+
+
+class _Message(BaseModel):
+    content: str | None = None
+    reasoning: _Text = None
+
+
+class _Choice(BaseModel):
+    message: _Message
+
+
+class _Reply(BaseModel):
+    """The part of an OpenRouter chat completion the fixer reads."""
+
+    provider: _Text = None
+    choices: list[_Choice] = Field(min_length=1)
+    usage: Annotated[_Usage | None, BeforeValidator(_mapping_or_none)] = None
+
+
+def _failure_stage(error: Exception) -> str:
+    """The stage a failed attempt is filed under on its generation (spec 12)."""
+    if isinstance(error, httpx.HTTPStatusError):
+        code = error.response.status_code
+        stage = "rate_limited" if code == 429 else "server_error" if code >= 500 else "client_error"
+        return f"{stage}: status={code}"
+    if isinstance(error, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(error, httpx.HTTPError):
+        return f"http_error: {type(error).__name__}"
+    return f"bad_response: {type(error).__name__}"
+
+
+def _record_reply(generation: LangfuseGeneration, reply: _Reply, content: str) -> None:
+    output: dict[str, str] = {"role": "assistant", "content": content}
+    reasoning = reply.choices[0].message.reasoning
+    if reasoning:
+        output["reasoning"] = reasoning
+    usage = reply.usage or _Usage()
+    prompt_details = usage.prompt_tokens_details or _Details()
+    completion_details = usage.completion_tokens_details or _Details()
+    buckets = tracing.usage_details(
+        prompt=usage.prompt_tokens,
+        completion=usage.completion_tokens,
+        cached=prompt_details.cached_tokens,
+        reasoning=completion_details.reasoning_tokens,
+    )
+    generation.update(
+        output=output,
+        usage_details=buckets or None,
+        cost_details=tracing.cost_details(usage.cost),
+        metadata={"provider": reply.provider} if reply.provider else None,
+    )
 
 
 _SCRIPT_STYLE_RE = re.compile(
@@ -115,6 +221,7 @@ async def fix_selector(
                 html=prepared_html,
                 old_samples=old_samples,
                 selector_type=selector_type,
+                attempt=attempt + 1,
             )
         except Exception as e:
             last_error = e
@@ -146,8 +253,13 @@ async def _call_llm(
     html: str,
     old_samples: list[str],
     selector_type: str = "css",
+    attempt: int = 1,
 ) -> dict[str, Any]:
-    """Call OpenRouter LLM to fix a broken selector."""
+    """Call OpenRouter LLM to fix a broken selector: one attempt, one generation.
+
+    ``attempt`` (1-based) is recorded on the generation. A failed attempt marks the
+    generation ERROR with its stage and raises unchanged, for ``fix_selector`` to retry.
+    """
     api_key = os.environ.get("OPENROUTER_API_KEY", "")
     base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
     model = os.environ.get("OPENROUTER_MODEL_PRIMARY", "").strip() or DEFAULT_MODEL
@@ -167,23 +279,47 @@ async def _call_llm(
         f'"confidence": 0.0 to 1.0, "sample_values": ["extracted", "examples"]}}'
     )
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"},
-                "temperature": 0.1,
-            },
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-        raw = json.loads(content)
-        validated = _LLMSelectorProposal.model_validate(raw)
+    messages = [{"role": "user", "content": prompt}]
+    parameters: dict[str, MapValue] = {"temperature": 0.1, "response_format": "json_object"}
+    with tracing.client().start_as_current_observation(
+        as_type="generation",
+        name="propose-selector",
+        model=model,
+        input=messages,
+        model_parameters=parameters,
+        metadata={"attempt": attempt},
+    ) as generation:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.1,
+                    },
+                    timeout=30.0,
+                )
+                resp.raise_for_status()
+            reply = _Reply.model_validate(resp.json())
+            content = reply.choices[0].message.content
+            if content is None or not content.strip():
+                msg = "the reply has no completion"
+                raise ValueError(msg)
+            # Recorded before the proposal is read: a reply the schema refuses
+            # (and the tokens it cost) is still on the trace.
+            _record_reply(generation, reply, content)
+            raw = json.loads(content)
+            validated = _LLMSelectorProposal.model_validate(raw)
+        except Exception as e:
+            generation.update(level="ERROR", status_message=_failure_stage(e))
+            raise
+        except asyncio.CancelledError:
+            generation.update(level="ERROR", status_message="cancelled before the model answered")
+            raise
         return validated.model_dump()

@@ -8,6 +8,10 @@ thinks. On 0 items we heal the container; on non-zero items with all-``None``
 values for some field we heal that field. Fixes for file-origin sources are
 recorded in ``heals`` (and an informational PR is opened); fixes for api-origin
 sources are additionally written back to ``sources.config_yaml``.
+
+Each heal is one Langfuse trace (docs/specs/12-tracing.md): ``heal-source`` with
+the fetch, one ``heal-selector`` per broken target, and under it the model's
+attempts, the check of its proposal and the PR or config patch.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ import yaml
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from magpie.config.schema import SelectorType, SourceConfig
+from magpie.core import tracing
 from magpie.core.safe_fetch import safe_get_async
 from magpie.healer.github_pr import create_heal_pr
 from magpie.healer.outcome import SOURCE_TARGET, HealedTarget, HealFailure, HealSummary
@@ -61,6 +66,18 @@ async def _fetch_html(config: SourceConfig) -> str:
         return resp.text
 
 
+async def _fetch_page(config: SourceConfig) -> str:
+    """``_fetch_html`` as the trace's ``fetch-page`` tool; a failure raises unchanged."""
+    with tracing.client().start_as_current_observation(
+        as_type="tool",
+        name="fetch-page",
+        input={"url": str(config.url), "render": config.render},
+    ) as observation:
+        html = await _fetch_html(config)
+        observation.update(output={"char_count": len(html)})
+        return html
+
+
 def patched_yaml(
     *,
     original_config: SourceConfig,
@@ -99,12 +116,31 @@ async def heal_source(
     source: str,
     run_id: uuid.UUID | None,
     session_factory: async_sessionmaker[AsyncSession],
+    trigger: tracing.Trigger,
 ) -> HealSummary:
     """Attempt to heal every broken selector on ``source``.
 
     Returns a :class:`HealSummary` that is either healed or carries the reason it
-    is not (spec 03, 2026-10-20). Every failure is logged at ERROR here.
+    is not (spec 03, 2026-10-20). Every failure is logged at ERROR here. The heal is
+    one trace, tagged with what started it (``trigger``, spec 12); a summary that did
+    not succeed makes the trace ERROR with its failures.
     """
+    with tracing.heal_trace(source=source, run_id=run_id, trigger=trigger) as trace_root:
+        summary = await _heal(source=source, run_id=run_id, session_factory=session_factory)
+        trace_root.update(
+            output=summary.model_dump(mode="json"),
+            level=None if summary.succeeded else "ERROR",
+            status_message=None if summary.succeeded else summary.describe_failures(),
+        )
+        return summary
+
+
+async def _heal(
+    *,
+    source: str,
+    run_id: uuid.UUID | None,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> HealSummary:
     async with session_factory() as session:
         repo = SourcesRepository(session)
         row = await repo.get_by_name(source)
@@ -120,7 +156,7 @@ async def heal_source(
         source_id = row.id
 
     try:
-        html = await _fetch_html(config)
+        html = await _fetch_page(config)
     except Exception as exc:
         log.exception("Heal fetch failed for %s", source)
         return HealSummary(
@@ -219,9 +255,89 @@ async def _heal_target(
 
     Records a ``heals`` row on every attempt that reached the LLM (even failed
     ones) so the caller can always trace what the LLM tried, and adds exactly one
-    entry to ``outcome``: healed, or failed with the reason.
+    entry to ``outcome``: healed, or failed with the reason. That entry is also the
+    ``heal-selector`` observation's output, ERROR when the target failed.
     """
     mode = HealMode.pr if origin is SourceOrigin.file else HealMode.db_patch
+    failures_before = len(outcome.failures)
+    with tracing.client().start_as_current_observation(
+        as_type="agent",
+        name="heal-selector",
+        input={
+            "target": target,
+            "old_selector": old_selector,
+            "selector_type": selector_type,
+            "mode": mode.value,
+        },
+    ) as step:
+        new_config = await _attempt_target(
+            session_factory=session_factory,
+            source_id=source_id,
+            run_id=run_id,
+            mode=mode,
+            source_name=source_name,
+            config=config,
+            target=target,
+            old_selector=old_selector,
+            selector_type=selector_type,
+            html=html,
+            outcome=outcome,
+        )
+        if len(outcome.failures) > failures_before:
+            reason = outcome.failures[-1].reason
+            step.update(
+                output={"healed": False, "reason": reason}, level="ERROR", status_message=reason
+            )
+        else:
+            healed = outcome.healed[-1]
+            step.update(
+                output={
+                    "healed": True,
+                    "new_selector": healed.new_selector,
+                    "mode": healed.mode.value,
+                    "pr_url": healed.pr_url,
+                    "applied": healed.applied,
+                }
+            )
+        return new_config
+
+
+def _check_selector(html: str, selector: str, selector_type: SelectorType) -> list[str]:
+    """``validate_selector`` as the trace's ``validate-selector`` evaluator.
+
+    It scores the model's output against the live page; a rejection is its output
+    (``accepted: false``), not an error of the check.
+    """
+    with tracing.client().start_as_current_observation(
+        as_type="evaluator",
+        name="validate-selector",
+        input={"selector": selector, "selector_type": selector_type},
+    ) as check:
+        samples = validate_selector(html, selector, selector_type)
+        check.update(
+            output={
+                "accepted": bool(samples),
+                "match_count": len(samples),
+                "sample_values": [value[:200] for value in samples[:3]],
+            }
+        )
+        return samples
+
+
+async def _attempt_target(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    source_id: uuid.UUID,
+    run_id: uuid.UUID | None,
+    mode: HealMode,
+    source_name: str,
+    config: SourceConfig,
+    target: str,
+    old_selector: str,
+    selector_type: SelectorType,
+    html: str,
+    outcome: _HealLog,
+) -> SourceConfig | None:
 
     try:
         proposal = await fix_selector(
@@ -258,7 +374,7 @@ async def _heal_target(
         return None
 
     new_selector = str(proposal["selector"])
-    samples = validate_selector(html, new_selector, selector_type)
+    samples = _check_selector(html, new_selector, selector_type)
     if not samples:
         await _record_heal(
             session_factory=session_factory,
@@ -286,34 +402,56 @@ async def _heal_target(
     applied = False
     new_config: SourceConfig | None = None
 
-    if origin is SourceOrigin.file:
+    if mode is HealMode.pr:
         # File-origin sources are healed via PR: commit the patched YAML onto the
         # heal branch and open a PR. The committed file is the real config file
         # under configs/, so the branch actually differs from base and the PR is
         # openable (previously the PR call had no branch/commit and 422'd).
         patched = patched_yaml(original_config=config, target=target, new_selector=new_selector)
-        pr_url = await create_heal_pr(
-            source_name=source_name,
-            field_name=target,
-            old_selector=old_selector,
-            new_selector=new_selector,
-            confidence=float(proposal.get("confidence", 0.0)),
-            reasoning=str(proposal.get("reasoning", "")),
-            sample_values=list(proposal.get("sample_values", [])),
-            file_path=f"configs/{source_name}.yaml",
-            new_content=patched,
-        )
+        file_path = f"configs/{source_name}.yaml"
+        with tracing.client().start_as_current_observation(
+            as_type="tool",
+            name="open-heal-pr",
+            input={
+                "source": source_name,
+                "target": target,
+                "file_path": file_path,
+                "new_selector": new_selector,
+            },
+        ) as pr_step:
+            pr_url = await create_heal_pr(
+                source_name=source_name,
+                field_name=target,
+                old_selector=old_selector,
+                new_selector=new_selector,
+                confidence=float(proposal.get("confidence", 0.0)),
+                reasoning=str(proposal.get("reasoning", "")),
+                sample_values=list(proposal.get("sample_values", [])),
+                file_path=file_path,
+                new_content=patched,
+            )
+            pr_step.update(
+                output={"pr_url": pr_url},
+                level="ERROR" if pr_url is None else None,
+                status_message="PR not opened" if pr_url is None else None,
+            )
     else:
         patched = patched_yaml(original_config=config, target=target, new_selector=new_selector)
         new_config = SourceConfig(**yaml.safe_load(patched))
-        async with session_factory() as session:
-            await SourcesRepository(session).update_config(
-                name=source_name,
-                config=new_config,
-                yaml_text=patched,
-            )
-            await session.commit()
-        applied = True
+        with tracing.client().start_as_current_observation(
+            as_type="tool",
+            name="patch-source-config",
+            input={"source": source_name, "target": target, "new_selector": new_selector},
+        ) as patch_step:
+            async with session_factory() as session:
+                await SourcesRepository(session).update_config(
+                    name=source_name,
+                    config=new_config,
+                    yaml_text=patched,
+                )
+                await session.commit()
+            applied = True
+            patch_step.update(output={"applied": applied})
 
     await _record_heal(
         session_factory=session_factory,

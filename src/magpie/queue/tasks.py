@@ -91,6 +91,7 @@ async def heal_source_task(
         source=source,
         run_id=parsed_run_id,
         session_factory=factory,
+        trigger="worker",
     )
     if not outcome.succeeded:
         log.error("heal FAILED for %s: %s", outcome.source, outcome.describe_failures())

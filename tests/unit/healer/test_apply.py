@@ -67,6 +67,7 @@ class TestHealApplyApiOrigin:
                 source="api-src",
                 run_id=None,
                 session_factory=session_factory,
+                trigger="worker",
             )
 
         assert result.origin is SourceOrigin.api
@@ -116,6 +117,7 @@ class TestHealApplyFileOrigin:
                 source="file-src",
                 run_id=None,
                 session_factory=session_factory,
+                trigger="worker",
             )
 
         assert result.origin is SourceOrigin.file
@@ -163,6 +165,7 @@ class TestHealApplyRejectsInvalidProposal:
                 source="rejecty",
                 run_id=None,
                 session_factory=session_factory,
+                trigger="worker",
             )
 
         assert result.healed == ()
@@ -208,6 +211,7 @@ item:
                 source="still-working",
                 run_id=None,
                 session_factory=session_factory,
+                trigger="worker",
             )
 
         # Nothing healable on the live page is a failure, not a quiet success:
@@ -226,6 +230,7 @@ class TestHealApplyMissingSource:
             source="ghost",
             run_id=None,
             session_factory=session_factory,
+            trigger="worker",
         )
         assert result.healed == ()
         assert result.origin is None
@@ -286,6 +291,7 @@ item:
                 source="broken-container",
                 run_id=None,
                 session_factory=session_factory,
+                trigger="worker",
             )
 
         # fix_selector was called with target='container' first
@@ -432,7 +438,7 @@ class TestHealFailuresAreReported:
             caplog.at_level(logging.ERROR, logger="magpie.healer"),
         ):
             result = await heal_source(
-                source="arxiv-like", run_id=None, session_factory=session_factory
+                source="arxiv-like", run_id=None, session_factory=session_factory, trigger="worker"
             )
 
         assert result.succeeded is False
@@ -464,7 +470,9 @@ class TestHealFailuresAreReported:
             ),
             caplog.at_level(logging.ERROR, logger="magpie.healer"),
         ):
-            result = await heal_source(source="nully", run_id=None, session_factory=session_factory)
+            result = await heal_source(
+                source="nully", run_id=None, session_factory=session_factory, trigger="worker"
+            )
 
         assert result.succeeded is False
         assert [f.target for f in result.failures] == ["title"]
@@ -495,7 +503,9 @@ class TestHealFailuresAreReported:
             patch("magpie.healer.apply.create_heal_pr", new=AsyncMock(return_value=None)),
             caplog.at_level(logging.ERROR, logger="magpie.healer"),
         ):
-            result = await heal_source(source="no-pr", run_id=None, session_factory=session_factory)
+            result = await heal_source(
+                source="no-pr", run_id=None, session_factory=session_factory, trigger="worker"
+            )
 
         assert result.succeeded is False
         assert result.healed == ()
@@ -518,7 +528,7 @@ class TestHealFailuresAreReported:
             new=AsyncMock(side_effect=httpx.ConnectError("name not resolved")),
         ):
             result = await heal_source(
-                source="unreachable", run_id=None, session_factory=session_factory
+                source="unreachable", run_id=None, session_factory=session_factory, trigger="worker"
             )
 
         assert result.succeeded is False

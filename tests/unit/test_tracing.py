@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -116,11 +116,8 @@ def _in_order(*responses: httpx.Response) -> Callable[[httpx.Request], httpx.Res
 def _llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.delenv("OPENROUTER_MODEL_PRIMARY", raising=False)
-
-    async def no_sleep(_s: float) -> None:
-        return None
-
-    monkeypatch.setattr(selector_fixer, "_backoff_sleep", no_sleep)
+    # Retries back off by RETRY_BASE_DELAY_S * 2^n: zero, so no test sleeps.
+    monkeypatch.setattr(selector_fixer, "RETRY_BASE_DELAY_S", 0.0)
 
 
 async def _seed(session_factory: Any, yaml_text: str, origin: SourceOrigin) -> str:
@@ -209,7 +206,7 @@ def test_t1_shutdown_before_first_use_is_a_no_op(monkeypatch: pytest.MonkeyPatch
 
 
 def test_t1_shutdown_shuts_the_client_down(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = AsyncMock()
+    client = MagicMock()
     monkeypatch.setattr(tracing, "_client", client)
     tracing.shutdown()
     client.shutdown.assert_called_once_with()

@@ -1,6 +1,9 @@
 """FastAPI lifespan for magpie.
 
-Two startup responsibilities, in order:
+Startup builds the Langfuse tracing client first (docs/specs/12-tracing.md), so an
+invalid ``APP_ENV`` stops the boot; shutdown flushes the traces still buffered,
+after the worker that produced them has stopped. Two more startup
+responsibilities, in order:
 
 1. **Sync file-origin sources into Postgres.** Any YAML that ships in
    ``configs/`` becomes an ``origin=file`` row so the API layer can treat all
@@ -25,6 +28,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from magpie.config.loader import load_config
+from magpie.core import tracing
 from magpie.paths import configs_dir
 from magpie.queue.app import queue_app
 from magpie.storage.db import get_session_factory
@@ -65,7 +69,8 @@ async def _sync_file_sources_to_db() -> int:
 
 @asynccontextmanager
 async def magpie_lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """FastAPI lifespan that owns both the worker task and the source sync."""
+    """FastAPI lifespan that owns the worker task, the source sync and tracing."""
+    tracing.client()
     try:
         await _sync_file_sources_to_db()
     except Exception:
@@ -101,6 +106,7 @@ async def magpie_lifespan(app: FastAPI) -> AsyncIterator[None]:
             await aclose_http_client()
         except Exception:
             log.exception("Error closing platform-token HTTP client")
+        tracing.shutdown()
 
 
 __all__ = ["_sync_file_sources_to_db", "magpie_lifespan"]

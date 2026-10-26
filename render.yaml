@@ -36,6 +36,15 @@ services:
         value: "scrape:self-heal"
       - key: APP_ENV
         value: production
+      # Langfuse tracing of the self-heal agent (docs/specs/12-tracing.md): the keys
+      # are dashboard secrets; the project is on US Cloud, the same base URL as
+      # heal-on-failure.yml. APP_ENV above is the trace environment.
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: LANGFUSE_BASE_URL
+        value: https://us.cloud.langfuse.com
       # NOTE (/version commit SHA): Render Blueprints expose no Docker build-arg
       # field, so the Dockerfile's `ARG COMMIT_SHA=unknown` keeps its default on
       # Render and the real value has to arrive at runtime. Render injects the
