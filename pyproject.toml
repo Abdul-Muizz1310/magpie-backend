@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "alembic>=1.18.5",
+    "alembic>=1.20.1",
     "asyncpg>=0.30",
     "beautifulsoup4>=4.15.0",
     "cssselect>=1.2",
