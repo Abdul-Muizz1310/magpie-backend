@@ -58,12 +58,13 @@ Scrapers break constantly. Selectors rot when sites redesign. The usual fix: som
 
 - 🏭 YAML-driven spider factory — static (Scrapy) or JS-rendered (Playwright) from one schema, CSS or XPath per field.
 - 🧬 LLM self-healing pipeline (detect → re-fetch → fix → validate → apply) with dual modes: PR for committed configs, in-place DB patch for runtime ones.
+- 🔭 One Langfuse trace per heal: the page fetch, every broken selector, each model attempt (tokens, cost, the failures), the proposal check and the PR or config patch.
 - 🔑 Content-addressed dedup (SHA-256 + NFC normalization).
 - 🗄️ Neon Postgres persistence with async SQLAlchemy + Alembic migrations.
 - 🧵 Async task queue (Procrastinate) embedded in the FastAPI lifespan; no separate worker service required on Render's free tier.
 - 🔎 FastAPI API — viewer endpoints (`/sources`, `/runs`, `/heals`) + custom-source CRUD (`/api/sources`) + async enqueue (`/api/scrape/{source}/enqueue`).
 - ⏰ GitHub Actions: CI + hourly scrape dispatch (each source on its own `schedule` cron) + heal-on-failure.
-- 🧪 624 tests (622 run, 2 live-smoke tests skip without `SMOKE_BASE_URL`), mypy strict, ruff clean.
+- 🧪 692 tests (690 run, 2 live-smoke tests skip without `SMOKE_BASE_URL`), mypy strict, ruff clean.
 - 📦 7 shipped configs: hackernews, arxiv-cs, lobsters, huggingface-papers, github-trending, producthunt-today, wikipedia-current-events.
 
 ---
@@ -93,6 +94,37 @@ sequenceDiagram
     GH-->>Detect: PR #42 (label: scrape:self-heal)
     Note over GH: awaits human review<br/>no auto-merge
 ```
+
+---
+
+## 🔭 Observability
+
+Every heal is one [Langfuse](https://langfuse.com) trace (Langfuse v4, Python SDK v5), shaped like
+the heal that ran — [spec 12](docs/specs/12-tracing.md):
+
+```mermaid
+flowchart TD
+    Root["heal-source · agent<br/>in: source, run_id · out: the HealSummary"]
+    Root --> Fetch["fetch-page · tool"]
+    Root --> Step["heal-selector · agent (one per broken selector)"]
+    Step --> Gen["propose-selector · generation (one per attempt)"]
+    Step --> Check["validate-selector · evaluator"]
+    Step --> Fix["open-heal-pr · tool / patch-source-config · tool"]
+```
+
+- **Every model attempt is its own generation** — the model it asked, the prompt, the reply (and
+  the model's reasoning when it returns one), token usage as exclusive buckets, OpenRouter's
+  reported cost and the attempt number. A 429, a 5xx or a reply that is not the proposal is a
+  generation at level `ERROR` naming the stage (`rate_limited: status=429`).
+- **Failures are where they happened:** a rejected proposal is the evaluator's output
+  (`accepted: false`); a target that did not heal is an `ERROR` `heal-selector` with its reason; a
+  heal that did not succeed is an `ERROR` trace carrying its failures — the same outcomes that make
+  the heal job exit 1.
+- **On every observation:** tags `magpie` and `trigger:worker|cli` (the queue task or the heal
+  job), `source` and `run_id` metadata, environment = `APP_ENV`, release = the deployed commit. No
+  request id reaches a heal, so there is no session.
+- Without `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` tracing is a no-op; export never blocks a
+  heal, and the lifespan and the heal job flush on the way out.
 
 ---
 
@@ -216,7 +248,8 @@ src/magpie/
 │   └── runner.py              # Playwright JS-rendered spider
 ├── core/
 │   ├── hashing.py             # SHA-256 + NFC content hashing
-│   └── safe_fetch.py          # SSRF-guarded httpx GET (redirect hosts re-validated)
+│   ├── safe_fetch.py          # SSRF-guarded httpx GET (redirect hosts re-validated)
+│   └── tracing.py             # Langfuse client, the heal trace, usage/cost buckets
 └── platform/
     ├── health.py              # /health (503 on DB down), /version
     ├── metrics.py             # Prometheus /metrics instrumentation
@@ -300,6 +333,7 @@ Dockerfile                     # Image with chromium + non-root user + HEALTHCHE
 | **Scheduling** | GitHub Actions hourly dispatch; each source runs on its own `schedule` cron |
 | **Artifact storage** | Cloudflare R2 (future — not yet wired for snapshots) |
 | **Healer LLM** | OpenRouter, free `google/gemma-4-26b-a4b-it:free` by default (override via `OPENROUTER_MODEL_PRIMARY`) |
+| **Observability** | Langfuse v4 through Python SDK v5 (OpenTelemetry under the hood) — one trace per heal; a no-op without keys |
 | **GitHub PRs** | httpx + GitHub REST API (idempotent per `heal/{source}` branch) |
 | **API framework** | FastAPI |
 | **CI** | GitHub Actions (lint + test with PG service + Docker build + push-gated post-deploy smoke), uv cached |
@@ -314,6 +348,7 @@ git clone https://github.com/Abdul-Muizz1310/magpie-backend.git
 cd magpie-backend
 cp .env.example .env
 # edit: DATABASE_URL (Neon), OPENROUTER_API_KEY, GITHUB_PAT_SCRAPE_HEALER
+#       (optional) LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY to trace heals
 
 # 2. install + browsers
 uv sync
@@ -400,7 +435,7 @@ README unnoticed.
 
 | Metric | Value |
 |---|---|
-| **Test count** | 624 tests (622 pass locally and in CI; the 2 live-smoke tests run only in the push-gated `smoke` job) |
+| **Test count** | 692 tests (690 pass locally and in CI; the 2 live-smoke tests run only in the push-gated `smoke` job) |
 | **Type discipline** | mypy strict clean, no `Any` leaking across module boundaries |
 | **Linting** | ruff check + ruff format clean |
 | **Config validation** | 35 tests (XPath, CSS, selector compile-check, cross-field validators) |

@@ -102,7 +102,8 @@ def _run_main(session_factory, monkeypatch, summaries: dict[str, HealSummary]):
     monkeypatch.setattr(heal_cli, "get_session_factory", lambda: session_factory)
     called: list[str] = []
 
-    async def _fake_heal(*, source, run_id, session_factory):  # type: ignore[no-untyped-def]
+    async def _fake_heal(*, source, run_id, session_factory, trigger):  # type: ignore[no-untyped-def]
+        assert trigger == "cli"  # spec 12: the heal job's traces are tagged trigger:cli
         called.append(source)
         return summaries[source]
 

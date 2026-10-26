@@ -13,6 +13,11 @@ exits 0 because a handful of items still make it through.
 Exit status (spec 03, "A heal ends healed or failed"): **1** when any heal
 target ends without a landed fix, so the workflow job is red; 0 when every
 target healed or there was no target. Each failed source is logged at ERROR.
+
+Each heal is a Langfuse trace tagged ``trigger:cli`` (spec 12). The process is
+short-lived, so ``main`` builds the tracing client first (an invalid ``APP_ENV``
+stops the job before any heal) and shuts it down on the way out, sending what is
+still buffered.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from collections.abc import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from magpie.core import tracing
 from magpie.healer.apply import heal_source
 from magpie.healer.detector import should_heal
 from magpie.healer.outcome import HealSummary
@@ -59,7 +65,7 @@ def _report(summary: HealSummary) -> None:
 async def _heal_one_source(source: str) -> int:
     factory = get_session_factory()
     log.info("manual-dispatch healing %s (no run context)", source)
-    summary = await heal_source(source=source, run_id=None, session_factory=factory)
+    summary = await heal_source(source=source, run_id=None, session_factory=factory, trigger="cli")
     _report(summary)
     return exit_code([summary])
 
@@ -108,7 +114,9 @@ async def _heal_recent_failures() -> int:
     summaries: list[HealSummary] = []
     for name, run_id in targets.items():
         log.info("healing %s (run %s)", name, run_id)
-        summary = await heal_source(source=name, run_id=run_id, session_factory=factory)
+        summary = await heal_source(
+            source=name, run_id=run_id, session_factory=factory, trigger="cli"
+        )
         _report(summary)
         summaries.append(summary)
 
@@ -127,7 +135,11 @@ async def _main() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO)
-    return asyncio.run(_main())
+    tracing.client()
+    try:
+        return asyncio.run(_main())
+    finally:
+        tracing.shutdown()
 
 
 if __name__ == "__main__":

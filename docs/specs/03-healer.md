@@ -110,6 +110,7 @@ target that did not, with a reason). A summary with neither is not constructible
 | the LLM call raised after its retries (OpenRouter 404, 429, 5xx, bad JSON) | the target | `LLM error:` |
 | the LLM proposed no selector | the target | `no selector proposed` |
 | the proposed selector extracts nothing from the live page | the target | `selector rejected:` |
+| the proposed selector does not compile as the CSS or XPath it claims to be | the target | `selector rejected:` |
 | file-origin: the selector validated but the PR was not opened | the target | `PR not opened` |
 
 Each failure is logged at ERROR where it happens; no secret and no token is logged.
@@ -147,6 +148,9 @@ Failure:
 - [x] The LLM raises (OpenRouter 404) → failure `LLM error:` naming the target; ERROR logged.
 - [x] The LLM proposes `null` → failure `no selector proposed`.
 - [x] The proposal extracts nothing → failure `selector rejected:`.
+- [x] The proposal does not compile (CSS `div[`, XPath `//div[`) → failure `selector rejected:` saying
+      it is not a valid selector, a heal row with `applied` false, and `heal_source` returns: the
+      selector is model output, so a malformed one is a rejected proposal, never a crash (2026-10-26).
 - [x] File-origin, the PR call returns nothing → failure `PR not opened`; not counted as healed.
 - [x] Live page extracts items with every field populated → failure `nothing to heal:`.
 - [x] Unknown source → failure `source not found`; fetch error → failure `fetch failed:`.

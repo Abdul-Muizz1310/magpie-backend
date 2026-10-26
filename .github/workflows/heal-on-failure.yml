@@ -45,3 +45,10 @@ jobs:
           GITHUB_REPO: Abdul-Muizz1310/magpie-backend
           GITHUB_HEAL_LABEL: "scrape:self-heal"
           HEAL_SOURCE_FILTER: ${{ inputs.source }}
+          # Langfuse tracing (docs/specs/12-tracing.md): every heal is one trace.
+          # The project is on US Cloud, which the SDK would not pick on its own,
+          # and APP_ENV is the trace environment. Same values as render.yaml.
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+          APP_ENV: production

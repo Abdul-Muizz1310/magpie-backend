@@ -67,6 +67,7 @@ class TestHealApplyApiOrigin:
                 source="api-src",
                 run_id=None,
                 session_factory=session_factory,
+                trigger="worker",
             )
 
         assert result.origin is SourceOrigin.api
@@ -116,6 +117,7 @@ class TestHealApplyFileOrigin:
                 source="file-src",
                 run_id=None,
                 session_factory=session_factory,
+                trigger="worker",
             )
 
         assert result.origin is SourceOrigin.file
@@ -163,6 +165,7 @@ class TestHealApplyRejectsInvalidProposal:
                 source="rejecty",
                 run_id=None,
                 session_factory=session_factory,
+                trigger="worker",
             )
 
         assert result.healed == ()
@@ -177,6 +180,45 @@ class TestHealApplyRejectsInvalidProposal:
             # One heal row recorded with applied=False
             assert len(heals) == 1
             assert heals[0].applied is False
+
+    async def test_proposal_that_does_not_compile_is_rejected_not_raised(
+        self, session_factory
+    ) -> None:
+        await _seed(session_factory, SourceOrigin.api, name="malformed")
+
+        with (
+            patch(
+                "magpie.healer.apply._fetch_html",
+                new=AsyncMock(return_value=HTML_WITH_TITLE_ONLY),
+            ),
+            patch(
+                "magpie.healer.apply.fix_selector",
+                new=AsyncMock(
+                    return_value={
+                        "selector": "div[",
+                        "confidence": 0.4,
+                        "reasoning": "half a selector",
+                        "sample_values": [],
+                    }
+                ),
+            ),
+        ):
+            result = await heal_source(
+                source="malformed",
+                run_id=None,
+                session_factory=session_factory,
+                trigger="worker",
+            )
+
+        assert result.healed == ()
+        assert [f.target for f in result.failures] == ["title"]
+        reason = result.failures[0].reason
+        assert reason.startswith("selector rejected: 'div[' is not a valid CSS selector")
+        async with session_factory() as session:
+            row = await SourcesRepository(session).get_by_name("malformed")
+            assert row is not None
+            heals = await HealsRepository(session).list_for_source(row.id)
+            assert [(h.new_selector, h.applied) for h in heals] == [("div[", False)]
 
     async def test_no_healing_needed_when_selector_still_matches(self, session_factory) -> None:
         working_yaml = """\
@@ -208,6 +250,7 @@ item:
                 source="still-working",
                 run_id=None,
                 session_factory=session_factory,
+                trigger="worker",
             )
 
         # Nothing healable on the live page is a failure, not a quiet success:
@@ -226,6 +269,7 @@ class TestHealApplyMissingSource:
             source="ghost",
             run_id=None,
             session_factory=session_factory,
+            trigger="worker",
         )
         assert result.healed == ()
         assert result.origin is None
@@ -286,6 +330,7 @@ item:
                 source="broken-container",
                 run_id=None,
                 session_factory=session_factory,
+                trigger="worker",
             )
 
         # fix_selector was called with target='container' first
@@ -432,7 +477,7 @@ class TestHealFailuresAreReported:
             caplog.at_level(logging.ERROR, logger="magpie.healer"),
         ):
             result = await heal_source(
-                source="arxiv-like", run_id=None, session_factory=session_factory
+                source="arxiv-like", run_id=None, session_factory=session_factory, trigger="worker"
             )
 
         assert result.succeeded is False
@@ -464,7 +509,9 @@ class TestHealFailuresAreReported:
             ),
             caplog.at_level(logging.ERROR, logger="magpie.healer"),
         ):
-            result = await heal_source(source="nully", run_id=None, session_factory=session_factory)
+            result = await heal_source(
+                source="nully", run_id=None, session_factory=session_factory, trigger="worker"
+            )
 
         assert result.succeeded is False
         assert [f.target for f in result.failures] == ["title"]
@@ -495,7 +542,9 @@ class TestHealFailuresAreReported:
             patch("magpie.healer.apply.create_heal_pr", new=AsyncMock(return_value=None)),
             caplog.at_level(logging.ERROR, logger="magpie.healer"),
         ):
-            result = await heal_source(source="no-pr", run_id=None, session_factory=session_factory)
+            result = await heal_source(
+                source="no-pr", run_id=None, session_factory=session_factory, trigger="worker"
+            )
 
         assert result.succeeded is False
         assert result.healed == ()
@@ -518,7 +567,7 @@ class TestHealFailuresAreReported:
             new=AsyncMock(side_effect=httpx.ConnectError("name not resolved")),
         ):
             result = await heal_source(
-                source="unreachable", run_id=None, session_factory=session_factory
+                source="unreachable", run_id=None, session_factory=session_factory, trigger="worker"
             )
 
         assert result.succeeded is False
