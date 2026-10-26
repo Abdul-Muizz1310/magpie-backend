@@ -76,6 +76,11 @@ generation wrapping the retries):
   `http_error: <type>`, or `bad_response: <type>` (a reply that is not the JSON proposal). The
   exception still reaches the retry loop unchanged. A cancelled attempt is `ERROR` too
   (`cancelled before the model answered`).
+- OpenRouter can answer **200 with its error object** instead of a completion (seen live on
+  2026-10-26: `rate_limit_exceeded` from the upstream provider). That attempt is filed under the
+  error's own code — `rate_limited: status=429 in the reply body` (`upstream_error: in the reply
+  body` without a code) — and the error object (`code`, `message`) is the generation's output, so
+  the cause is on the trace rather than a schema complaint.
 
 The raw-HTML prompt is public page content (the source's own URL), so inputs and outputs are kept
 in full.
@@ -123,7 +128,10 @@ Fast tier (`tests/unit/test_tracing.py`, a client on an in-memory exporter — n
 - **T6** a 429 then a valid reply through `fix_selector` → two generations: attempt 1 `ERROR`
   `rate_limited: status=429`, attempt 2 `DEFAULT`; a 500 → `server_error: status=500`; a reply
   that is not the proposal → `bad_response: ValidationError`; three failures → three `ERROR`
-  generations and the last error raised.
+  generations and the last error raised. A 200 carrying OpenRouter's error object with code 429 →
+  `rate_limited: status=429 in the reply body` and the error as the output; with code 502 →
+  `server_error: status=502 in the reply body`; with no code → `upstream_error: in the reply
+  body`.
 - **T7** a composed api-origin container heal (`heal_source`, HTTP stubbed): one trace; root
   `heal-source` (`agent`) with `{source, run_id}` in and the summary out; children `fetch-page`
   then `heal-selector`; under it `propose-selector`, `validate-selector` (`accepted: true`) and

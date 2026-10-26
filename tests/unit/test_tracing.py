@@ -383,8 +383,17 @@ async def test_t6_a_retried_attempt_is_its_own_error_generation(traces: Traces) 
         ),
         (httpx.Response(200, json=_reply("not json")), "bad_response: JSONDecodeError"),
         (httpx.Response(200, json=_reply(None)), "bad_response: ValueError"),
-        (httpx.Response(200, json={"choices": []}), "bad_response: ValidationError"),
+        (httpx.Response(200, json={"choices": []}), "bad_response: ValueError"),
+        (httpx.Response(200, json={"nothing": "here"}), "bad_response: ValueError"),
         (httpx.Response(200, text="<html>"), "bad_response: JSONDecodeError"),
+        (
+            httpx.Response(200, json={"id": "gen-1", "error": {"code": 502, "message": "down"}}),
+            "server_error: status=502 in the reply body",
+        ),
+        (
+            httpx.Response(200, json={"error": {"message": "no code"}}),
+            "upstream_error: in the reply body",
+        ),
     ],
 )
 async def test_t6_each_kind_of_failed_attempt_names_its_stage(
@@ -397,6 +406,32 @@ async def test_t6_each_kind_of_failed_attempt_names_its_stage(
     first = traces.named("propose-selector")[0]
     assert traces.level(first) == "ERROR"
     assert traces.status_message(first) == message
+
+
+async def test_t6_an_error_inside_a_200_is_filed_under_its_code(traces: Traces) -> None:
+    """Seen live on 2026-10-26: OpenRouter answered 200 with the provider's rate limit."""
+    body = {
+        "id": "gen-1793011066",
+        "provider": "Phala",
+        "error": {
+            "code": 429,
+            "message": "Rate limit exceeded",
+            "metadata": {"error_type": "rate_limit_exceeded"},
+        },
+    }
+    with openrouter(_in_order(httpx.Response(200, json=body), _ok())):
+        result = await fix_selector(
+            field_name="title", old_selector="s", html="<html></html>", old_samples=[]
+        )
+    assert result is not None
+    first, second = traces.named("propose-selector")
+    assert traces.level(first) == "ERROR"
+    assert traces.status_message(first) == "rate_limited: status=429 in the reply body"
+    assert traces.decoded(first, OUTPUT) == {
+        "error": {"code": 429, "message": "Rate limit exceeded"}
+    }
+    assert traces.metadata(first) == {"attempt": 1, "provider": "Phala"}
+    assert traces.level(second) == "DEFAULT"
 
 
 async def test_t6_a_rejected_reply_is_still_on_the_generation(traces: Traces) -> None:
