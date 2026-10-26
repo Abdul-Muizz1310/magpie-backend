@@ -8,7 +8,14 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from magpie.healer.selector_fixer import DEFAULT_MODEL, _call_llm, fix_selector
+from magpie.healer.selector_fixer import (
+    DEFAULT_FALLBACK_MODEL,
+    DEFAULT_FAST_MODEL,
+    DEFAULT_MODEL,
+    ModelsExhaustedError,
+    _call_llm,
+    fix_selector,
+)
 
 
 def _mock_llm_client() -> tuple[AsyncMock, AsyncMock]:
@@ -57,6 +64,11 @@ class TestModelDefault:
         # Pin the portfolio's primary free model (global pick, 2026-10-20) so a paid swap,
         # or a slug OpenRouter has withdrawn, is caught explicitly.
         assert DEFAULT_MODEL == "google/gemma-4-26b-a4b-it:free"
+
+    def test_the_cascade_defaults_are_free_slugs(self) -> None:
+        """FAST and FALLBACK default to paper-trail's live free slugs (spec 03, 2026-10-26)."""
+        assert DEFAULT_FAST_MODEL == "xingchen-agi/xing4.0-29b-a4b:free"
+        assert DEFAULT_FALLBACK_MODEL == "dots-studio/dots-3-note-preview:free"
 
     @pytest.mark.asyncio
     async def test_uses_free_default_when_model_env_unset(self) -> None:
@@ -224,15 +236,12 @@ class TestCallLlm:
 
 class TestFixSelectorRetryExhaustion:
     @pytest.mark.asyncio
-    async def test_all_retries_fail_raises_last_error(self) -> None:
-        """When all 3 retries fail, the last error is raised."""
+    async def test_every_model_failing_raises_one_error_naming_each_tier(self) -> None:
+        """A non-transient failure on every model -> one try each, then ModelsExhaustedError."""
+        mock = AsyncMock(side_effect=ValueError("always fails"))
         with (
-            patch(
-                "magpie.healer.selector_fixer._call_llm",
-                new_callable=AsyncMock,
-                side_effect=ValueError("always fails"),
-            ),
-            pytest.raises(ValueError, match="always fails"),
+            patch("magpie.healer.selector_fixer._call_llm", new=mock),
+            pytest.raises(ModelsExhaustedError) as exc,
         ):
             await fix_selector(
                 field_name="title",
@@ -240,11 +249,16 @@ class TestFixSelectorRetryExhaustion:
                 html="<html></html>",
                 old_samples=[],
             )
+        assert mock.await_count == 3
+        assert str(exc.value) == (
+            "primary=bad_response: ValueError; fast=bad_response: ValueError; "
+            "fallback=bad_response: ValueError"
+        )
 
     @pytest.mark.asyncio
-    async def test_zero_retries_returns_none(self) -> None:
-        """When MAX_RETRIES is 0, loop doesn't run and returns None (line 46)."""
-        with patch("magpie.healer.selector_fixer.MAX_RETRIES", 0):
+    async def test_zero_attempts_returns_none(self) -> None:
+        """With no attempt allowed per model, nothing is asked and nothing failed."""
+        with patch("magpie.healer.selector_fixer.ATTEMPTS_PER_MODEL", 0):
             result = await fix_selector(
                 field_name="title",
                 old_selector="span.old::text",

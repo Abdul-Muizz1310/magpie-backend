@@ -14,7 +14,7 @@ import math
 import os
 import re
 from collections.abc import Mapping
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import httpx
 from langfuse import LangfuseGeneration
@@ -26,13 +26,41 @@ from magpie.core import tracing
 log = logging.getLogger("magpie.healer.selector_fixer")
 
 MAX_HTML_LENGTH = 40000
-MAX_RETRIES = 3
+ATTEMPTS_PER_MODEL = 2
 RETRY_BASE_DELAY_S = 2.0
 
-# Default to the portfolio's primary free OpenRouter model rather than a paid one.
-# An unset OPENROUTER_MODEL_PRIMARY must never silently bill paid credits (MAG-5).
-# render.yaml and heal-on-failure.yml name the same slug (tests/unit/test_ops_baseline.py).
+# Default to the portfolio's free OpenRouter models rather than paid ones: an unset
+# OPENROUTER_MODEL_* must never silently bill paid credits (MAG-5). render.yaml and
+# heal-on-failure.yml name the same slugs (tests/unit/test_ops_baseline.py); FAST and
+# FALLBACK are paper-trail's, smoke-tested with JSON mode on 2026-10-26 (spec 03).
 DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
+DEFAULT_FAST_MODEL = "xingchen-agi/xing4.0-29b-a4b:free"
+DEFAULT_FALLBACK_MODEL = "dots-studio/dots-3-note-preview:free"
+
+Tier = Literal["primary", "fast", "fallback"]
+
+_SLOTS: tuple[tuple[Tier, str, str], ...] = (
+    ("primary", "OPENROUTER_MODEL_PRIMARY", DEFAULT_MODEL),
+    ("fast", "OPENROUTER_MODEL_FAST", DEFAULT_FAST_MODEL),
+    ("fallback", "OPENROUTER_MODEL_FALLBACK", DEFAULT_FALLBACK_MODEL),
+)
+
+
+def cascade(environ: Mapping[str, str]) -> list[tuple[Tier, str]]:
+    """PRIMARY -> FAST -> FALLBACK (spec 03, The cascade); a blank slot takes its default.
+
+    A slug already in the cascade is not asked twice.
+    """
+    order: list[tuple[Tier, str]] = []
+    for tier, variable, default in _SLOTS:
+        model = environ.get(variable, "").strip() or default
+        if all(model != asked for _, asked in order):
+            order.append((tier, model))
+    return order
+
+
+class ModelsExhaustedError(Exception):
+    """Every model in the cascade failed; the message names each tier's last failure."""
 
 
 class _LLMSelectorProposal(BaseModel):
@@ -228,33 +256,50 @@ async def fix_selector(
     """Ask an LLM to propose a new selector (CSS or XPath) for a broken field.
 
     Returns the LLM response dict with keys: selector, confidence, reasoning,
-    sample_values. Returns None only on total failure after retries.
+    sample_values; None only when no attempt was allowed at all.
 
-    Transient errors (429/5xx) are retried with exponential backoff so all three
-    attempts don't fire back-to-back into the same rate limit (spec 03-healer).
+    The models cascade PRIMARY -> FAST -> FALLBACK (spec 03, The cascade): a transient
+    failure (429, 5xx, timeout, dropped connection) earns one more attempt on the same
+    model after a backoff, anything else asks the next model at once. When every
+    model failed, raises :class:`ModelsExhaustedError` naming each tier's failure.
     """
     prepared_html = _prepare_html_for_llm(html, old_selector)
 
+    failures: list[str] = []
     last_error: Exception | None = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            return await _call_llm(
-                field_name=field_name,
-                old_selector=old_selector,
-                html=prepared_html,
-                old_samples=old_samples,
-                selector_type=selector_type,
-                attempt=attempt + 1,
-            )
-        except Exception as e:
-            last_error = e
-            if attempt < MAX_RETRIES - 1:
+    for tier, model in cascade(os.environ):
+        for attempt in range(ATTEMPTS_PER_MODEL):
+            try:
+                return await _call_llm(
+                    field_name=field_name,
+                    old_selector=old_selector,
+                    html=prepared_html,
+                    old_samples=old_samples,
+                    selector_type=selector_type,
+                    model=model,
+                    tier=tier,
+                    attempt=attempt + 1,
+                )
+            except Exception as e:
+                last_error = e
+                if not _transient(e) or attempt == ATTEMPTS_PER_MODEL - 1:
+                    failures.append(f"{tier}={_failure_stage(e)}")
+                    break
                 await asyncio.sleep(_retry_delay(e, attempt))
-            continue
 
-    if last_error:
-        raise last_error
+    if failures:
+        raise ModelsExhaustedError("; ".join(failures)) from last_error
     return None
+
+
+def _transient(error: Exception) -> bool:
+    """A failure worth a second attempt on the same model (spec 03, The cascade)."""
+    if isinstance(error, httpx.HTTPStatusError):
+        code = error.response.status_code
+        return code == 429 or code >= 500
+    if isinstance(error, _UpstreamError):
+        return error.code is not None and (error.code == 429 or error.code >= 500)
+    return isinstance(error, httpx.TimeoutException | httpx.TransportError)
 
 
 def _retry_delay(error: Exception, attempt: int) -> float:
@@ -276,16 +321,20 @@ async def _call_llm(
     html: str,
     old_samples: list[str],
     selector_type: str = "css",
+    model: str | None = None,
+    tier: Tier = "primary",
     attempt: int = 1,
 ) -> dict[str, Any]:
     """Call OpenRouter LLM to fix a broken selector: one attempt, one generation.
 
-    ``attempt`` (1-based) is recorded on the generation. A failed attempt marks the
-    generation ERROR with its stage and raises unchanged, for ``fix_selector`` to retry.
+    ``model`` defaults to the PRIMARY slot. ``tier`` and ``attempt`` (1-based, per model)
+    are recorded on the generation. A failed attempt marks the generation ERROR with its
+    stage and raises unchanged, for ``fix_selector``'s cascade.
     """
     api_key = os.environ.get("OPENROUTER_API_KEY", "")
     base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-    model = os.environ.get("OPENROUTER_MODEL_PRIMARY", "").strip() or DEFAULT_MODEL
+    if model is None:
+        model = os.environ.get("OPENROUTER_MODEL_PRIMARY", "").strip() or DEFAULT_MODEL
 
     kind = "XPath" if selector_type == "xpath" else "CSS"
     prompt = (
@@ -310,7 +359,7 @@ async def _call_llm(
         model=model,
         input=messages,
         model_parameters=parameters,
-        metadata={"attempt": attempt},
+        metadata={"tier": tier, "attempt": attempt},
     ) as generation:
         try:
             async with httpx.AsyncClient() as client:

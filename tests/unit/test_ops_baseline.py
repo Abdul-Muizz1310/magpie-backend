@@ -238,6 +238,37 @@ def test_heal_workflow_pins_the_code_default_model() -> None:
     assert healer_step["env"][_MODEL_ENV] == DEFAULT_MODEL
 
 
+def _cascade_defaults() -> dict[str, str]:
+    from magpie.healer import selector_fixer
+
+    return {
+        "OPENROUTER_MODEL_PRIMARY": selector_fixer.DEFAULT_MODEL,
+        "OPENROUTER_MODEL_FAST": selector_fixer.DEFAULT_FAST_MODEL,
+        "OPENROUTER_MODEL_FALLBACK": selector_fixer.DEFAULT_FALLBACK_MODEL,
+    }
+
+
+def test_render_blueprint_names_every_cascade_slot() -> None:
+    """Spec 03, The cascade: render.yaml sets FAST and FALLBACK to the code defaults too."""
+    blueprint = yaml.safe_load(RENDER_BLUEPRINT.read_text(encoding="utf-8"))
+    env = {
+        entry["key"]: entry.get("value")
+        for service in blueprint["services"]
+        for entry in service["envVars"]
+    }
+    assert {key: env.get(key) for key in _cascade_defaults()} == _cascade_defaults()
+
+
+def test_heal_workflow_names_every_cascade_slot() -> None:
+    """The heal job names all three models in the workflow, not in unseen secrets."""
+    jobs = _workflow(HEAL_WORKFLOW)["jobs"]
+    assert isinstance(jobs, dict)
+    heal_steps = jobs["heal"]["steps"]
+    healer_step = next(s for s in heal_steps if "magpie.healer.run" in str(s.get("run", "")))
+    env = healer_step["env"]
+    assert {key: env.get(key) for key in _cascade_defaults()} == _cascade_defaults()
+
+
 # ── Langfuse: one project and one region everywhere a heal runs (spec 12) ───
 
 _LANGFUSE_KEYS = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")

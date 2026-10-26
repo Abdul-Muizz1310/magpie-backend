@@ -28,6 +28,12 @@ services:
       # Same slug as selector_fixer.DEFAULT_MODEL and heal-on-failure.yml.
       - key: OPENROUTER_MODEL_PRIMARY
         value: google/gemma-4-26b-a4b-it:free
+      # The healer cascades PRIMARY -> FAST -> FALLBACK on 429/5xx (spec 03, The
+      # cascade); the same slugs as the code defaults and heal-on-failure.yml.
+      - key: OPENROUTER_MODEL_FAST
+        value: xingchen-agi/xing4.0-29b-a4b:free
+      - key: OPENROUTER_MODEL_FALLBACK
+        value: dots-studio/dots-3-note-preview:free
       - key: GITHUB_PAT_SCRAPE_HEALER
         sync: false
       - key: GITHUB_REPO
