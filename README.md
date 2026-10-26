@@ -332,7 +332,7 @@ Dockerfile                     # Image with chromium + non-root user + HEALTHCHE
 | **Content hashing** | SHA-256 with NFC normalization |
 | **Scheduling** | GitHub Actions hourly dispatch; each source runs on its own `schedule` cron |
 | **Artifact storage** | Cloudflare R2 (future — not yet wired for snapshots) |
-| **Healer LLM** | OpenRouter, free `google/gemma-4-26b-a4b-it:free` by default (override via `OPENROUTER_MODEL_PRIMARY`) |
+| **Healer LLM** | OpenRouter free models, cascading on 429/5xx: `google/gemma-4-26b-a4b-it:free` → `xingchen-agi/xing4.0-29b-a4b:free` → `dots-studio/dots-3-note-preview:free` (override via `OPENROUTER_MODEL_PRIMARY` / `_FAST` / `_FALLBACK`; spec 03) |
 | **Observability** | Langfuse v4 through Python SDK v5 (OpenTelemetry under the hood) — one trace per heal; a no-op without keys |
 | **GitHub PRs** | httpx + GitHub REST API (idempotent per `heal/{source}` branch) |
 | **API framework** | FastAPI |
