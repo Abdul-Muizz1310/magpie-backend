@@ -10,4 +10,6 @@ I built magpie because every job that touches scraping eventually asks the same 
 
 ## What I'd change if I did it again
 
+I would have traced the healer from the first commit. Until 2026-10-26 a heal left log lines and a `heals` row, which keep the final proposal but not the prompt, the failed attempts, the model's reply or what it cost; when every OpenRouter call answered 404 on 2026-10-19, the logs were the only record. Each heal is now a Langfuse trace with every attempt as its own generation ([spec 12](docs/specs/12-tracing.md)).
+
 I would invest earlier in a local replay mode that serves cached HTML fixtures so the full test suite runs without network access. The current integration tests hit fixture files, but the gap between fixture HTML and live HTML grows over time and tests can pass while real scrapes silently degrade.

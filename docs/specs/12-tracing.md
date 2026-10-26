@@ -44,7 +44,7 @@ filters target them); run-specific values live in metadata, never in a name.
 | live page fetch | `tool` | `fetch-page` | `{url, render}` | `{char_count}` |
 | one broken target (container or field) | `agent` | `heal-selector` | `{target, old_selector, selector_type, mode}` | healed: `{healed: true, new_selector, mode, pr_url, applied}`; not: `{healed: false, reason}` |
 | each model attempt | `generation` | `propose-selector` | the chat messages | `{role: "assistant", content[, reasoning]}` |
-| proposal check | `evaluator` | `validate-selector` | `{selector, selector_type}` | `{accepted, match_count, sample_values}` |
+| proposal check | `evaluator` | `validate-selector` | `{selector, selector_type}` | `{accepted, match_count, sample_values}` (the first three matches, each cut to 200 characters) |
 | file-origin fix | `tool` | `open-heal-pr` | `{source, target, file_path, new_selector}` | `{pr_url}` |
 | api-origin fix | `tool` | `patch-source-config` | `{source, target, new_selector}` | `{applied: true}` |
 

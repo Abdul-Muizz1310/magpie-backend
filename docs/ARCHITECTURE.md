@@ -59,6 +59,16 @@ sequenceDiagram
     end
 ```
 
+Every heal is one Langfuse trace ([spec 12](specs/12-tracing.md)), built by hand around the
+steps above because the healer calls OpenRouter over raw `httpx`: `heal-source` (`agent`) holds
+`fetch-page` (`tool`) and one `heal-selector` (`agent`) per broken target, which holds a
+`propose-selector` generation per model attempt, the `validate-selector` evaluator and the
+`open-heal-pr` or `patch-source-config` tool. Each `heal-selector` takes its output and level
+from the one entry its target adds to the `HealSummary`, so the trace and the heal job's exit
+code can never disagree. `core/tracing.py` builds the client from the environment (both
+`LANGFUSE_*` keys, or a no-op), validates `APP_ENV` as the trace environment at startup, and
+the lifespan and `healer/run.py` shut it down so buffered spans are sent.
+
 ## Deduplication flow
 
 Each extracted item is normalized and hashed. The hash is compared against stored hashes for the same source to classify items into four categories.
