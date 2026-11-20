@@ -27,7 +27,11 @@ updates:
       - "dependencies"
       - "python"
     groups:
+      # Minor and patch only: a major in the group would hold every other bump
+      # hostage, since a group PR cannot be partially merged. Majors arrive as
+      # their own PRs.
       dev-tooling:
+        update-types: ["minor", "patch"]
         patterns:
           - "ruff"
           - "mypy"
