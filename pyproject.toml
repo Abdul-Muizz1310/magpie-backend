@@ -9,25 +9,25 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "alembic>=1.18.5",
-    "asyncpg>=0.30",
+    "alembic>=1.20.1",
+    "asyncpg>=0.32.0",
     "beautifulsoup4>=4.15.0",
-    "cssselect>=1.2",
-    "fastapi>=0.135.3",
+    "cssselect>=1.6.0",
+    "fastapi>=0.165.0",
     "httpx>=0.28.1",
-    "langfuse>=5.0.4,<6",
-    "parsel>=1.11.0",
-    "playwright>=1.62.0",
-    "procrastinate>=3.0",
-    "prometheus-fastapi-instrumentator>=7.0",
-    "psycopg[binary]>=3.1",
-    "pydantic>=2.13.4",
-    "pyjwt[crypto]>=2.13.0",
+    "langfuse>=5.2.0,<6",
+    "parsel>=1.12.1",
+    "playwright>=1.65.2",
+    "procrastinate>=3.12.0",
+    "prometheus-fastapi-instrumentator>=8.1.0",
+    "psycopg[binary]>=3.3.9",
+    "pydantic>=2.14.4",
+    "pyjwt[crypto]>=2.15.1",
     "pyyaml>=6.0.3",
-    "scrapy>=2.17.0",
-    "slowquery-detective[fastapi,postgres]>=0.2,<0.3",
-    "sqlalchemy>=2.0.49",
-    "uvicorn>=0.44.0",
+    "scrapy>=2.20.0",
+    "slowquery-detective[fastapi,postgres]>=0.2.1,<0.3",
+    "sqlalchemy[asyncio]>=2.1.9",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]
@@ -42,16 +42,16 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "aiosqlite>=0.22.1",
-    "lxml-stubs>=0.5",
-    "mypy>=2.4.0",
-    "opentelemetry-sdk>=1.45",
-    "pytest>=9.1.1",
-    "pytest-asyncio>=1.4.0",
+    "lxml-stubs>=0.5.1",
+    "mypy>=2.4.1",
+    "opentelemetry-sdk>=1.45.2",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.17.0",
+    "ruff>=0.17.6",
     "testcontainers[postgres]>=4.15.0",
     "types-beautifulsoup4>=4.12.0.20250516",
-    "types-pyyaml>=6.0.12.20260906",
+    "types-pyyaml>=6.0.12.20261113",
 ]
 
 [tool.ruff]
