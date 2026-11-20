@@ -13,7 +13,7 @@ Three GitHub Actions workflows:
 
 - **Trigger:** `push` to main, `pull_request` targeting main
 - **Jobs:** `lint` (ruff check + ruff format --check + mypy) → `test` (pytest with a Postgres service, Playwright chromium pre-installed) → `build` (`docker build`)
-- **uv is cached via `astral-sh/setup-uv@v3 enable-cache: true`.**
+- **uv is cached via `astral-sh/setup-uv@v10.3.3 enable-cache: true` (an exact release tag: setup-uv publishes no major tags since v8).**
 
 ### `nightly-scrape.yml`
 
