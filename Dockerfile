@@ -2,8 +2,10 @@ FROM python:3.12-slim AS base
 
 WORKDIR /app
 
-# Runtime deps: bash for entrypoint, curl for HEALTHCHECK.
-RUN apt-get update && apt-get install -y --no-install-recommends bash curl \
+# Runtime deps: bash for entrypoint, curl for HEALTHCHECK, libatomic1 for
+# Playwright's bundled Node driver (it must start before `playwright install
+# --with-deps` can add anything; 1.65 exits 127 without it).
+RUN apt-get update && apt-get install -y --no-install-recommends bash curl libatomic1 \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir uv
 

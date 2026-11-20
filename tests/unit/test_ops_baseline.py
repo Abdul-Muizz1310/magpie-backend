@@ -62,6 +62,24 @@ def test_ci_docker_build_passes_commit_sha_build_arg() -> None:
     assert "--build-arg COMMIT_SHA=" in text, "ci.yml docker build must pass --build-arg COMMIT_SHA"
 
 
+def test_image_installs_libatomic_before_the_playwright_driver_runs() -> None:
+    """Playwright's bundled Node driver links ``libatomic.so.1``; python:3.12-slim lacks it.
+
+    ``playwright install --with-deps`` cannot supply it: the driver has to start
+    before it can install anything. With playwright 1.65 the image build died at
+    that step with "libatomic.so.1: cannot open shared object file" (exit 127),
+    so the library must come from the apt-get layer that runs first.
+    """
+    text = DOCKERFILE.read_text(encoding="utf-8").replace("\\\n", " ")
+    runs = [line for line in text.splitlines() if line.startswith("RUN ")]
+    apt = [i for i, line in enumerate(runs) if "apt-get install" in line]
+    driver = [i for i, line in enumerate(runs) if "playwright install" in line]
+    assert driver, "the Dockerfile must install Playwright's browser"
+    assert any(re.search(r"\blibatomic1\b", runs[i]) and i < driver[0] for i in apt), (
+        "an apt-get install of libatomic1 must run before `playwright install`"
+    )
+
+
 def _container_command() -> list[str]:
     """The Dockerfile's final exec-form ``CMD``: the argv the entrypoint execs."""
     text = DOCKERFILE.read_text(encoding="utf-8").replace("\\\n", " ")
